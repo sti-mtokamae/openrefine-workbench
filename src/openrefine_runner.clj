@@ -323,24 +323,25 @@
                         "&csrf_token=" csrf-token)
           
           client (http-client)
+          ;; バイナリレスポンスハンドラーを使用（xlsx/xls は binary）
           req (-> (HttpRequest/newBuilder (URI/create (str base-url "/command/core/export-rows")))
                   (.timeout (Duration/ofMinutes 2))
                   (.header "Content-Type" "application/x-www-form-urlencoded")
                   (.POST (HttpRequest$BodyPublishers/ofString post-data))
                   .build)
-          resp (.send client req (HttpResponse$BodyHandlers/ofString))
+          resp (.send client req (HttpResponse$BodyHandlers/ofByteArray))
           status (.statusCode resp)
-          body (.body resp)]
+          body-bytes (.body resp)]
       
       (when-not (<= 200 status 399)
         (throw (ex-info "export-rows API failed"
-                        {:status status :body (subs body 0 (min 500 (count body)))})))
+                        {:status status :body (String. body-bytes)})))
       
-      ;; バイナリデータとして保存（Excel ファイル対応）
+      ;; バイナリデータとしてファイルに保存
       (when-not (.exists (io/file output-file))
         (io/make-parents output-file))
       (with-open [w (io/output-stream output-file)]
-        (.write w (.getBytes body "ISO-8859-1")))
+        (.write w body-bytes))
       
       {:success? true :output-file output-file})
     (catch Exception e
