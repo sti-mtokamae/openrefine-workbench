@@ -441,8 +441,10 @@
       (try
         ;; Phase 1: Create project
         (let [csrf-token (fetch-csrf-token base-url)
-              ;; Import オプション: trimStrings を false に設定してインデント保持
-              import-options (str "{\"trimStrings\": false}")
+              ;; Import オプション: 複数ファイルの場合はファイル名を最初のカラムに追加
+              import-options (if (> (count (:input/files trial)) 1)
+                               "{\"trimStrings\": false, \"includeFileSources\": true}"
+                               "{\"trimStrings\": false}")
               project-id (create-project!
                           {:base-url base-url
                            :project-name project
