@@ -1,0 +1,27 @@
+# Build and cache
+.cpcache/
+.clj-kondo/.cache/
+.lsp/
+target/
+build/
+dist/
+
+# External tools
+bin/orcli
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.log
+*.bak
+tmp/
+.temp/

@@ -1,7 +1,15 @@
-src
-package com.example;
-public class FooController {
-public String foo() {
-return "foo";
-}
-}
+File	src
+FooController.java	package com.example;
+FooController.java	
+FooController.java	public class FooController {
+FooController.java	public String foo() {
+FooController.java	return "foo";
+FooController.java	}
+FooController.java	}
+BarService.java	package com.example;
+BarService.java	
+BarService.java	public class BarService {
+BarService.java	public void bar() {
+BarService.java	System.out.println("bar");
+BarService.java	}
+BarService.java	}

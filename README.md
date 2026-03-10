@@ -49,7 +49,19 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 
 ---
 
-## 2. Windows 側: OpenRefine 起動
+## 2. orcli CLI ツールをダウンロード
+
+OpenRefine の自動化に必要な `orcli` をダウンロードして `bin/` ディレクトリに配置：
+
+```bash
+cd openrefine-workbench
+curl -sSfL https://raw.githubusercontent.com/opencultureconsulting/orcli/main/orcli -o bin/orcli
+chmod +x bin/orcli
+```
+
+---
+
+## 3. Windows 側: OpenRefine 起動
 
 WSL からアクセスするため、OpenRefine を **0.0.0.0 で起動**します。
 
@@ -74,7 +86,7 @@ OpenRefine はデフォルトでは localhost のみで起動します。WSL か
 
 ---
 
-## 3. WSL 側: 接続確認
+## 4. WSL 側: 接続確認
 
 OpenRefine に接続できるか確認：
 
@@ -99,24 +111,43 @@ curl http://172.27.160.1:3333/
 
 ### 実行時の流れ
 
-1. OpenRefine に接続確認
-2. CSRF トークン取得
-3. Java ファイルをアップロード
-4. 新しいプロジェクトを作成
-5. ブラウザで自動的に開く
+**Phase 1: Project 自動作成**
+- OpenRefine 接続確認
+- CSRF トークン取得
+- Java ファイルをアップロード
+- プロジェクト作成
+- ブラウザ自動オープン
+
+**Phase 2: Operations 自動適用** *(seed-history.json がある場合)*
+- `orcli transform` で seed-history を実行
+- 複数操作を順序実行
+
+**Phase 3: Results 自動出力** *(output/dir が設定の場合)*
+- `orcli export` で TSV/CSV 形式に変換
+- exports/ ディレクトリに保存
 
 ### 成功時の出力例
 
 ```
 trial: 2026-03-06-java-scope-001
-openrefine: http://172.27.160.1:3333
-[DEBUG] Reachable: fetching CSRF token...
-[DEBUG] CSRF token: yhPZ7BOudDLKz95nuLK7...
-[DEBUG] Creating project...
-project-id: 2398035680029
-project-url: http://172.27.160.1:3333/project?project=2398035680029
+tool: :openrefine
+goal: class/method scope extraction
+
+Phase 1: Project created
+project-id: 2563553952142
+project-url: http://172.27.160.1:3333/project?project=2563553952142
 opening browser via wslview ...
 [DEBUG] Browser opened successfully
+
+Phase 2: Applying operations...
+applying: trials/2026-03-06-java-scope-001/seed-history.json
+[DEBUG] orcli transform stderr: transformed 2563553952142 with rename-column
+Response: カラム 1 を src に名前変更
+
+Phase 3: Exporting results...
+exporting to: trials/2026-03-06-java-scope-001/exports/java-scope-001.tsv
+
+✓ Trial completed successfully
 ```
 
 ### このリポジトリのワークフロー
@@ -222,14 +253,19 @@ Undo / Redo → Extract → JSON
 ```
 trial.edn
     ↓
-project 作成
+project 作成 (Phase 1)
     ↓
-operations 適用
+operations 適用 (Phase 2 - orcli)
+    ↓
+results 出力 (Phase 3 - orcli)
 ```
 
 という形で trial の再現が可能になります。
 
-**現在の runner では seed の自動適用はまだ実装していませんが、** 将来的には `apply-operations` API を使って再実行可能にする予定です。
+**実装状況：**
+✅ Phase 2 で `orcli transform` を使って自動適用
+- 複数の操作を順序実行可能
+- エラーハンドリング済み
 
 ---
 
@@ -334,20 +370,52 @@ workbench の最初のコネクタとして、trial セッションを OpenRefin
 
 ## 次の段階（Phase 2: CLI による自動化テスト）
 
-🔧 次にやるべき：
+✅ 実装完了：
 
-1. **OpenRefine CLI の検証**
-   - `orcli` または `openrefine-client` で Windows/WSL 間の動作確認
-   - 以下を確認：
-     - `import` - ファイル投入が通るか
-     - `apply-operations` - seed history の適用が通るか
-     - `export` - 結果出力が通るか
+- `orcli` (OpenRefine Bash CLI) を統合
+- `seed-history.json` の自動適用機能
+- orcli の `transform` コマンドで複数操作を順序実行
+- 実際の trial で動作確認済み
 
-2. **CLI が足りるなら**
-   ```
-   trial.edn → CLI で投入 → 出力ファイル
-   ```
-   この軽量な構成で OpenRefine automation を完結できる
+**この段階の構成：**
+```
+Phase 1: Project 作成 (REST API)
+    ↓
+Phase 2: Operations 適用 (orcli)
+    ↓
+Phase 3: Results 出力 (orcli export)
+```
+
+**実装詳細：**
+- [src/openrefine_runner.clj](src/openrefine_runner.clj) に以下関数を装備
+  - `apply-operations!` - orcli transform を実行して seed-history を apply
+  - `export-results!` - orcli export で TSV/CSV など形式で出力
+  - 環境変数 `OPENREFINE_URL` で OpenRefine 接続先を制御
+
+**試行実績：**
+- Trial: `2026-03-06-java-scope-001`
+  - 入力: FooController.java, BarService.java
+  - 中間: OpenRefine で rename-column 操作
+  - 出力: exports/java-scope-001.tsv (101 bytes)
+  - 🎉 完全成功
+
+---
+
+## 次の段階（Phase 3: Multi-tool Workbench）
+
+🚀 設計中：
+
+1. **Tablecloth (Clojure) による処理定着**
+   - seed-history JSON → Clojure 関数に変換
+   - クライアント側で再実行可能に
+
+2. **複数ツール対応**
+   - OpenRefine の次のステップ： Tablecloth / code-slice など
+   - trial.edn の `:trial/tool` で柔軟に切り替え可能に設計
+
+3. **長期ビジョン**
+   - Unix pipes + Lisp data = Simple Made Easy
+   - trial → tool chains → reproducible analysis
 
 3. **CLI が足りなければ**
    - `fetch-csrf-token` / `multipart-body` / `create-project!` の API 直叩き実装に降りる

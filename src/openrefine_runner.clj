@@ -71,6 +71,14 @@
   (or (:openrefine/open-browser? trial)
       (:runner/open-browser? trial)))
 
+(defn import-format [trial]
+  (or (:openrefine/import-format trial)
+      "text/line-based"))
+
+(defn export-format [trial]
+  (or (:openrefine/export-format trial)
+      "tsv"))
+
 ;; -------------------------
 ;; http helpers
 ;; -------------------------
@@ -142,35 +150,44 @@
   (str "----openrefine-runner-" (UUID/randomUUID)))
 
 (defn multipart-body
-  [{:keys [boundary project-name file-path format options]}]
-  (let [file       (io/file file-path)
-        filename   (.getName file)
-        file-bytes (Files/readAllBytes (.toPath file))
-        parts      [(utf8-bytes
-                     (str "--" boundary "\r\n"
-                          "Content-Disposition: form-data; name=\"project-name\"\r\n\r\n"
-                          project-name "\r\n"))
+  [{:keys [boundary project-name file-paths format options]}]
+  (let [file-paths (if (string? file-paths) [file-paths] file-paths)
+        parts (concat
+               ;; project-name フィールド
+               [(utf8-bytes
+                 (str "--" boundary "\r\n"
+                      "Content-Disposition: form-data; name=\"project-name\"\r\n\r\n"
+                      project-name "\r\n"))]
 
-                    (when format
-                      (utf8-bytes
-                       (str "--" boundary "\r\n"
-                            "Content-Disposition: form-data; name=\"format\"\r\n\r\n"
-                            format "\r\n")))
+               ;; format フィールド (オプション)
+               (when format
+                 [(utf8-bytes
+                   (str "--" boundary "\r\n"
+                        "Content-Disposition: form-data; name=\"format\"\r\n\r\n"
+                        format "\r\n"))])
 
-                    (when options
-                      (utf8-bytes
-                       (str "--" boundary "\r\n"
-                            "Content-Disposition: form-data; name=\"options\"\r\n\r\n"
-                            options "\r\n")))
+               ;; options フィールド (オプション)
+               (when options
+                 [(utf8-bytes
+                   (str "--" boundary "\r\n"
+                        "Content-Disposition: form-data; name=\"options\"\r\n\r\n"
+                        options "\r\n"))])
 
-                    (utf8-bytes
-                     (str "--" boundary "\r\n"
-                          "Content-Disposition: form-data; name=\"project-file\"; filename=\"" filename "\"\r\n"
-                          "Content-Type: text/plain\r\n\r\n"))
+               ;; 各ファイルを project-file として追加
+               (mapcat (fn [file-path]
+                         (let [file (io/file file-path)
+                               filename (.getName file)
+                               file-bytes (Files/readAllBytes (.toPath file))]
+                           [(utf8-bytes
+                             (str "--" boundary "\r\n"
+                                  "Content-Disposition: form-data; name=\"project-file\"; filename=\"" filename "\"\r\n"
+                                  "Content-Type: text/plain\r\n\r\n"))
+                            file-bytes
+                            (utf8-bytes "\r\n")]))
+                       file-paths)
 
-                    file-bytes
-                    (utf8-bytes "\r\n")
-                    (utf8-bytes (str "--" boundary "--\r\n"))]]
+               ;; 終端 boundary
+               [(utf8-bytes (str "--" boundary "--\r\n"))])]
     (remove nil? parts)))
 
 ;; -------------------------
@@ -178,10 +195,9 @@
 ;; -------------------------
 
 (defn create-project!
-  [{:keys [base-url project-name file-path format options csrf-token]}]
+  [{:keys [base-url project-name file-paths format options csrf-token]}]
   (let [boundary (random-boundary)
         client   (http-client)
-        ;; Query parameter に csrf_token を含める
         url (str (str/replace base-url #"/$" "")
                  "/command/core/create-project-from-upload?csrf_token=" csrf-token)
         req      (-> (HttpRequest/newBuilder
@@ -193,7 +209,7 @@
                       (HttpRequest$BodyPublishers/ofByteArrays
                        (multipart-body {:boundary boundary
                                         :project-name project-name
-                                        :file-path file-path
+                                        :file-paths file-paths
                                         :format format
                                         :options options})))
                      .build)
@@ -237,7 +253,7 @@
 (defn apply-operations!
   [{:keys [openrefine-url project-id seed-file]}]
   (try
-    (let [pb (ProcessBuilder. ["./orcli" "transform" (str project-id) seed-file])
+    (let [pb (ProcessBuilder. ["./bin/orcli" "transform" (str project-id) seed-file])
           env (.environment pb)]
       (.put env "OPENREFINE_URL" openrefine-url)
       (let [process (.start pb)
@@ -255,7 +271,7 @@
   [{:keys [openrefine-url project-id output-file format]}]
   (try
     (let [fmt (or format "tsv")
-          pb (ProcessBuilder. ["./orcli" "export" fmt (str project-id) "--output" output-file])
+          pb (ProcessBuilder. ["./bin/orcli" "export" fmt (str project-id) "--output" output-file])
           env (.environment pb)]
       (.put env "OPENREFINE_URL" openrefine-url)
       (let [process (.start pb)
@@ -289,6 +305,8 @@
      :openrefine/url          (openrefine-url trial)
      :openrefine/project-name (project-name trial)
      :openrefine/open-browser? (boolean (open-browser? trial))
+     :openrefine/import-format (import-format trial)
+     :openrefine/export-format (export-format trial)
 
      :input/files             files
      :seed/files              seeds
@@ -327,7 +345,7 @@
   (let [trial      (normalize-trial trial-file)
         base-url   (:openrefine/url trial)
         project    (:openrefine/project-name trial)
-        input-file (first (:input/files trial))
+        input-files (:input/files trial)
         seed-files (:seed/files trial)
         output-dir (:output/dir trial)
         ok?        (reachable? base-url)]
@@ -341,7 +359,10 @@
       (println "goal:" g))
     (println "project:" project)
     (println "openrefine:" base-url)
-    (println "input-file:" input-file)
+    (when (seq input-files)
+      (println "input-files:")
+      (doseq [f input-files]
+        (println " -" f)))
 
     (when-let [notes (:notes/file trial)]
       (println "notes:" notes))
@@ -359,8 +380,8 @@
               project-id (create-project!
                           {:base-url base-url
                            :project-name project
-                           :file-path input-file
-                           :format "text/line-based"
+                           :file-paths (:input/files trial)
+                           :format (:openrefine/import-format trial)
                            :options nil
                            :csrf-token csrf-token})
               project-url (str (str/replace base-url #"/$" "")
@@ -390,15 +411,16 @@
             (println)
             (println "Phase 3: Exporting results...")
             ;; 出力ディレクトリを確認・作成
-            (let [out-path (io/file output-dir)]
+            (let [out-path (io/file output-dir)
+                  fmt (:openrefine/export-format trial)]
               (when-not (.exists out-path)
                 (.mkdirs out-path))
-              (let [output-file (io/file out-path (str project ".tsv"))]
+              (let [output-file (io/file out-path (str project "." fmt))]
                 (println " exporting to:" (.getPath output-file))
                 (export-results! {:openrefine-url base-url
                                  :project-id project-id
                                  :output-file (.getPath output-file)
-                                 :format "tsv"}))))
+                                 :format fmt}))))
 
           (println)
           (println "✓ Trial completed successfully"))
