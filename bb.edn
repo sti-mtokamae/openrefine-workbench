@@ -1,0 +1,6 @@
+{:paths ["src"]
+
+ :tasks
+ {run-trial
+  {:doc "run openrefine trial"
+   :task (apply clojure "-M" "-m" "openrefine-runner" *command-line-args*)}}}

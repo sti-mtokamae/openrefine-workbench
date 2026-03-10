@@ -1,0 +1,18 @@
+{:trial/id "2026-03-06-java-scope-001"
+ :trial/tool :openrefine
+ :trial/tags [:java :spring :scope]
+
+ :input/files
+ ["../repo/src/main/java/com/example/FooController.java"
+  "../repo/src/main/java/com/example/BarService.java"]
+
+ :goal "class/method scope extraction"
+
+ :notes/file "notes.md"
+ :output/dir "exports"
+
+ :seed/files ["seed-history.json"]
+
+ :openrefine/url "http://172.27.160.1:3333"
+ :openrefine/project-name "java-scope-001"
+ :openrefine/open-browser? true}
