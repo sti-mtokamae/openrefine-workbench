@@ -1,0 +1,14 @@
+{:trial/id "test-csv-import"
+ :trial/tool :openrefine
+ 
+ :input/files
+ ["../repo/src/main/java/com/example/FooController.java"]
+ 
+ :goal "test CSV import"
+ 
+ :output/dir "exports"
+
+ :openrefine/url "http://172.27.160.1:3333"
+ :openrefine/project-name "test-csv-import"
+ :openrefine/import-format "text/csv"
+ :openrefine/export-format "tsv"}

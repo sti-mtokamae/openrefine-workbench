@@ -4,7 +4,7 @@
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import
-   [java.net URI]
+   [java.net URI URLEncoder]
    [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
    [java.nio.charset StandardCharsets]
    [java.nio.file Files]
@@ -271,15 +271,36 @@
   [{:keys [openrefine-url project-id output-file format]}]
   (try
     (let [fmt (or format "tsv")
-          pb (ProcessBuilder. ["./bin/orcli" "export" fmt (str project-id) "--output" output-file])
-          env (.environment pb)]
-      (.put env "OPENREFINE_URL" openrefine-url)
-      (let [process (.start pb)
-            exit-code (.waitFor process)
-            stderr (slurp (.getErrorStream process))]
-        (if (zero? exit-code)
-          {:success? true :output-file output-file}
-          (throw (ex-info "orcli export failed" {:stderr stderr})))))
+          ;; OpenRefine API を直接呼び出す: export-rows エンドポイント
+          ;; trimStrings: false を明示的に指定（スペース保持）
+          base-url (str/replace openrefine-url #"/$" "")
+          csrf-token (fetch-csrf-token base-url)
+          separator (if (= fmt "csv") "," "\t")
+          options-json (str "{\"separator\":\"" separator "\",\"trimStrings\":false}")
+          
+          ;; POST データの構築（CSRF token を含める）
+          post-data (str "project=" project-id
+                        "&format=" fmt
+                        "&options=" (URLEncoder/encode options-json "UTF-8")
+                        "&csrf_token=" csrf-token)
+          
+          client (http-client)
+          req (-> (HttpRequest/newBuilder (URI/create (str base-url "/command/core/export-rows")))
+                  (.timeout (Duration/ofMinutes 2))
+                  (.header "Content-Type" "application/x-www-form-urlencoded")
+                  (.POST (HttpRequest$BodyPublishers/ofString post-data))
+                  .build)
+          resp (.send client req (HttpResponse$BodyHandlers/ofString))
+          status (.statusCode resp)
+          body (.body resp)]
+      
+      (when-not (<= 200 status 399)
+        (throw (ex-info "export-rows API failed"
+                        {:status status :body (subs body 0 (min 500 (count body)))})))
+      
+      ;; レスポンスをファイルに保存
+      (spit output-file body)
+      {:success? true :output-file output-file})
     (catch Exception e
       (throw (ex-info "Failed to export results" {:error (.getMessage e)})))))
 
