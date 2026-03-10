@@ -377,12 +377,14 @@
       (try
         ;; Phase 1: Create project
         (let [csrf-token (fetch-csrf-token base-url)
+              ;; Import オプション: trimStrings を false に設定してインデント保持
+              import-options (str "{\"trimStrings\": false}")
               project-id (create-project!
                           {:base-url base-url
                            :project-name project
                            :file-paths (:input/files trial)
                            :format (:openrefine/import-format trial)
-                           :options nil
+                           :options import-options
                            :csrf-token csrf-token})
               project-url (str (str/replace base-url #"/$" "")
                                "/project?project=" project-id)]

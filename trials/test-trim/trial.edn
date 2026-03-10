@@ -1,0 +1,14 @@
+{:trial/id "test-trim"
+ :trial/tool :openrefine
+ 
+ :input/files
+ ["../repo/src/main/java/com/example/FooController.java"]
+ 
+ :goal "test trimStrings: false"
+ 
+ :output/dir "exports"
+
+ :openrefine/url "http://172.27.160.1:3333"
+ :openrefine/project-name "test-trim"
+ :openrefine/import-format "text/line-based"
+ :openrefine/export-format "tsv"}
