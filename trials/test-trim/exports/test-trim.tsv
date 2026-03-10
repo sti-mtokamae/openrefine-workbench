@@ -1,7 +1,0 @@
-カラム 1
-package com.example;
-public class FooController {
-public String foo() {
-return "foo";
-}
-}

@@ -77,7 +77,36 @@
 
 (defn export-format [trial]
   (or (:openrefine/export-format trial)
-      "tsv"))
+      "xlsx"))
+
+;; -------------------------
+;; export format mapping
+;; -------------------------
+
+(defn format-to-openrefine-format [fmt]
+  "Convert user-friendly format name to OpenRefine export format parameter"
+  (case fmt
+    "xlsx" "xlsx"
+    "xls"  "xls"
+    "ods"  "ods"
+    "csv"  "csv"
+    "tsv"  "tsv"
+    "html" "html"
+    "json" "json"
+    fmt))  ; default: pass through as-is
+
+(defn format-to-file-extension [fmt]
+  "Convert format name to file extension"
+  (case fmt
+    "xlsx" "xlsx"
+    "xls"  "xls"
+    "ods"  "ods"
+    "csv"  "csv"
+    "tsv"  "tsv"
+    "html" "html"
+    "json" "json"
+    "jsonl" "jsonl"
+    fmt))  ; default: pass through as-is
 
 ;; -------------------------
 ;; http helpers
@@ -270,13 +299,22 @@
 (defn export-results!
   [{:keys [openrefine-url project-id output-file format]}]
   (try
-    (let [fmt (or format "tsv")
+    (let [fmt (format-to-openrefine-format (or format "xlsx"))
           ;; OpenRefine API を直接呼び出す: export-rows エンドポイント
-          ;; trimStrings: false を明示的に指定（スペース保持）
+          ;; xlsx フォーマットではトリムされない（ユーザーの発見）
           base-url (str/replace openrefine-url #"/$" "")
           csrf-token (fetch-csrf-token base-url)
-          separator (if (= fmt "csv") "," "\t")
-          options-json (str "{\"separator\":\"" separator "\",\"trimStrings\":false}")
+          
+          ;; フォーマットによってオプションを変更
+          options-json (case fmt
+                         ("csv" "tsv") 
+                         (let [separator (if (= fmt "csv") "," "\t")]
+                           ;; CSV/TSV はトリムされるが、オプションを試す
+                           (str "{\"separator\":\"" separator "\",\"trimStrings\":false}"))
+                         
+                         ("xlsx" "xls" "ods" "html" "json")
+                         ;; Excel/ODS/HTML/JSON はオプション不要またはシンプル
+                         "{}")
           
           ;; POST データの構築（CSRF token を含める）
           post-data (str "project=" project-id
@@ -298,8 +336,12 @@
         (throw (ex-info "export-rows API failed"
                         {:status status :body (subs body 0 (min 500 (count body)))})))
       
-      ;; レスポンスをファイルに保存
-      (spit output-file body)
+      ;; バイナリデータとして保存（Excel ファイル対応）
+      (when-not (.exists (io/file output-file))
+        (io/make-parents output-file))
+      (with-open [w (io/output-stream output-file)]
+        (.write w (.getBytes body "ISO-8859-1")))
+      
       {:success? true :output-file output-file})
     (catch Exception e
       (throw (ex-info "Failed to export results" {:error (.getMessage e)})))))
@@ -435,10 +477,11 @@
             (println "Phase 3: Exporting results...")
             ;; 出力ディレクトリを確認・作成
             (let [out-path (io/file output-dir)
-                  fmt (:openrefine/export-format trial)]
+                  fmt (:openrefine/export-format trial)
+                  ext (format-to-file-extension fmt)]
               (when-not (.exists out-path)
                 (.mkdirs out-path))
-              (let [output-file (io/file out-path (str project "." fmt))]
+              (let [output-file (io/file out-path (str project "." ext))]
                 (println " exporting to:" (.getPath output-file))
                 (export-results! {:openrefine-url base-url
                                  :project-id project-id

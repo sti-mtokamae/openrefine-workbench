@@ -11,4 +11,4 @@
  :openrefine/url "http://172.27.160.1:3333"
  :openrefine/project-name "test-csv-import"
  :openrefine/import-format "text/csv"
- :openrefine/export-format "tsv"}
+ :openrefine/export-format "xlsx"}
