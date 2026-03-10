@@ -1,0 +1,8 @@
+[
+  {
+    "op": "core/column-rename",
+    "oldColumnName": "カラム 1",
+    "newColumnName": "src",
+    "description": "カラム カラム 1 を src に名前変更"
+  }
+]

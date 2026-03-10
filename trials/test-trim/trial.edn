@@ -1,14 +1,18 @@
-{:trial/id "test-trim"
+{:trial/id "test-trim-multi"
  :trial/tool :openrefine
  
  :input/files
- ["../repo/src/main/java/com/example/FooController.java"]
+ ["../repo/src/main/java/com/example/FooController.java"
+  "../repo/src/main/java/com/example/BarService.java"]
  
- :goal "test trimStrings: false"
+ :goal "test xlsx export with multiple files and seed operations"
  
+ :notes/file "notes.md"
  :output/dir "exports"
 
+ :seed/files ["seed-history.json"]
+
  :openrefine/url "http://172.27.160.1:3333"
- :openrefine/project-name "test-trim"
+ :openrefine/project-name "test-trim-multi"
  :openrefine/import-format "text/line-based"
  :openrefine/export-format "xlsx"}
