@@ -25,13 +25,28 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 
 ```
 .
-├── bin/run-trial          # 実行スクリプト
-├── src/                   # OpenRefine runner (Clojure)
-├── bb.edn                 # Babashka タスク定義
-└── trials/                # trial ごとの作業ディレクトリ
-    ├── repo/              # 分析対象のコードベース（Git clone 推奨）
-    └── YOUR-TRIAL-ID/     # 個別の試行ディレクトリ
+├── bin/
+│   ├── run-trial              # CLI ツール実行スクリプト
+│   └── start-openrefine.ps1   # Windows 用 OpenRefine 起動スクリプト
+├── src/                       # OpenRefine runner (Clojure)
+├── bb.edn                     # Babashka タスク定義
+└── trials/
+    ├── samples/               # 公開可能なサンプル trial
+    │   ├── repo/              # サンプル分析対象コード
+    │   ├── test-csv-import/   # サンプル trial: CSV インポート
+    │   ├── test-trim/         # サンプル trial: テキスト整形
+    │   └── 2026-03-06-java-scope-001/  # サンプル trial: Java 分析例
+    │
+    └── experiments/           # ローカル作業用（.gitignore で除外）
+        ├── 2026-03-26-subtotal/           # 実際のプロジェクト分析
+        ├── 2026-03-26-subtotal-diff/      # 差分分析
+        └── 2026-03-26-test-init/          # 初期化試験
 ```
+
+**構成方針:**
+- `trials/samples/` — 公開リポジトリに含まれる（ツール例・ドキュメント用）
+- `trials/experiments/` — `.gitignore` で除外（実際のソースコード含む）
+- バージョン更新時も構造は変わらない
 
 ---
 
@@ -63,10 +78,40 @@ chmod +x bin/orcli
 
 ## 3. Windows 側: OpenRefine 起動
 
-WSL からアクセスするため、OpenRefine を **0.0.0.0 で起動**します。
+### PowerShell スクリプト使用（推奨）
+
+`bin/start-openrefine.ps1` を OpenRefine インストールフォルダにコピーして実行：
 
 ```powershell
-$env:JAVA_HOME="C:\Users\mtoka\usrapp\openrefine-3.9.5\server\target\jre"
+# このリポジトリから start-openrefine.ps1 をコピー
+Copy-Item bin\start-openrefine.ps1 C:\Users\mtoka\usrapp\openrefine-3.9.5\
+
+# OpenRefine フォルダに移動して実行
+cd C:\Users\mtoka\usrapp\openrefine-3.9.5
+.\start-openrefine.ps1
+```
+
+**スクリプトが自動で行うこと：**
+- PATH から Java を自動検出
+- JAVA_HOME を動的に設定
+- OpenRefine を 0.0.0.0:3333 で起動（WSL からアクセス可能に）
+- 接続先 URL を表示
+
+**バージョン更新時：**
+新しい OpenRefine ディレクトリに `start-openrefine.ps1` をコピーすれば同じように実行可能です。
+
+#### PowerShell 実行ポリシー
+
+初回実行時にポリシーエラーが出た場合：
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+### 手動で起動する場合（参考）
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-25.0.1.8-hotspot"
 cd C:\Users\mtoka\usrapp\openrefine-3.9.5
 .\refine.bat /i 0.0.0.0 run
 ```
@@ -75,14 +120,11 @@ cd C:\Users\mtoka\usrapp\openrefine-3.9.5
 
 OpenRefine はデフォルトでは localhost のみで起動します。WSL から接続する場合は `/i 0.0.0.0` オプションが必須です。
 
-### 注意
+### よくあるミス
 
-以下の方法では WSL から接続できません：
-
-- ❌ `openrefine.exe` を使う
+- ❌ `openrefine.exe` を使う（refine.bat を使用すること）
 - ❌ `JAVA_HOME` を設定しない
-
-必ず `refine.bat /i 0.0.0.0 run` で起動してください。
+- ❌ `/i 0.0.0.0` オプションなしで起動
 
 ---
 
@@ -103,10 +145,23 @@ curl http://172.27.160.1:3333/
 
 # クイックスタート
 
-## 最初の trial を実行
+## サンプル trial を実行
 
 ```bash
-./bin/run-trial trials/2026-03-06-java-scope-001/trial.edn
+# サンプル trial: CSV インポート
+./bin/run-trial trials/samples/test-csv-import/trial.edn
+
+# サンプル trial: Java ソース分析
+./bin/run-trial trials/samples/2026-03-06-java-scope-001/trial.edn
+```
+
+## 新しい trial を作成（ローカル作業用）
+
+```bash
+# experiments フォルダに新規作業ディレクトリ作成
+# このフォルダは .gitignore で除外されているため、
+# 実際のソースコードを含めても公開されません
+./bin/run-trial trials/experiments/YOUR-TRIAL-ID/trial.edn
 ```
 
 ### 実行時の流れ
