@@ -25,7 +25,10 @@
   (let [f (io/file path)]
     (if (.isAbsolute f)
       f
-      (io/file base-dir path))))
+      (-> (io/file base-dir path)
+          .toPath
+          .toAbsolutePath
+          .toFile))))
 
 (defn ensure-file-exists! [path]
   (when-not (.exists (io/file path))
@@ -441,10 +444,8 @@
       (try
         ;; Phase 1: Create project
         (let [csrf-token (fetch-csrf-token base-url)
-              ;; Import オプション: 複数ファイルの場合はファイル名を最初のカラムに追加
-              import-options (if (> (count (:input/files trial)) 1)
-                               "{\"trimStrings\": false, \"includeFileSources\": true}"
-                               "{\"trimStrings\": false}")
+              ;; Import オプション: ファイル名を常に最初のカラムに追加
+              import-options "{\"trimStrings\": false, \"includeFileSources\": true}"
               project-id (create-project!
                           {:base-url base-url
                            :project-name project

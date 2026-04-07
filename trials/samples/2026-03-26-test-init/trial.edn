@@ -1,0 +1,16 @@
+{:trial/id "2026-03-26-test-init"
+ :trial/tool :openrefine
+ :trial/tags []  ; TODO: 分類タグを追加
+
+ :input/files
+ ["../repo/src/main/java/com/example/BarService.java"
+  "../repo/src/main/java/com/example/FooController.java"]
+
+ :goal ""  ; TODO: trial の目的を説明
+
+ :notes/file "notes.md"
+ :output/dir "exports"
+
+ :openrefine/url "http://172.27.160.1:3333"
+ :openrefine/project-name "2026-03-26-test-init"
+ :openrefine/open-browser? true}

@@ -170,6 +170,139 @@ notes.md に結果を記録
 
 ---
 
+# Trial の初期化
+
+## ワークフロー
+
+trial の作成と実行は以下の流れで行います：
+
+```
+1. trial.edn スケルトンを自動生成
+    ↓
+2. trial.edn で :goal と :trial/tags を編集
+    ↓
+3. trial を実行
+```
+
+## Step 1: trial.edn スケルトンを自動生成
+
+### パターン検索ベース
+
+**複数のパターンで Java ファイルを検索：**
+
+```bash
+./bin/init-trial --trial-id "2026-03-26-mapper-study" \
+  --pattern "*Mapper.java" \
+  --pattern "*ServiceImpl.java"
+```
+
+### git diff ベース
+
+**git diff からファイルを自動抽出：**
+
+```bash
+./bin/init-trial --trial-id "2026-03-26-subtotal-analysis" \
+  --git-repo "../tradehub-web-backend_0107" \
+  --git-range "develop..sonnt-4232" \
+  --include-diff
+```
+
+**差分を詳細テーブル形式でも取得：**
+
+```bash
+./bin/init-trial --trial-id "2026-03-26-subtotal-analysis" \
+  --git-repo "../tradehub-web-backend_0107" \
+  --git-range "develop..sonnt-4232" \
+  --include-diff \
+  --include-stat
+```
+
+オプション `--include-stat` を指定すると、`git diff --stat` の表形式もファイルとして生成されます。
+
+実行結果：
+
+```
+✓ Trial initialized: trials/2026-03-26-subtotal-analysis
+  ├── trial.edn        (edit :goal and :trial/tags)
+  ├── notes.md         (edit observations)
+  ├── develop..sonnt-4232.diff          ; ← フルテキスト差分
+  ├── develop..sonnt-4232.stat          ; ← 変更統計テーブル (--include-stat のみ)
+  └── exports/         (results directory)
+
+Next step:
+  1. Edit: vim trials/2026-03-26-subtotal-analysis/trial.edn
+  2. Run:  ./bin/run-trial trials/2026-03-26-subtotal-analysis/trial.edn
+```
+
+**diff.stat ファイルの中身例：**
+
+```
+ .../web/common/config/WebSecurityConfig.java       |   1 +
+ .../service/impl/DocumentsServiceImpl.java         | 249 +++++++-
+ .../subtotal/mapper/DocumentGenerateMapper.java    | 314 ++++++++++
+ .../mapper/SourceProjectAggregateMapper.java       | 649 +++++++++++++++++++++
+ ...
+ 18 files changed, 1693 insertions(+), 18 deletions(-)
+```
+
+**生成される trial.edn 例：**
+
+```edn
+{:trial/id "2026-03-26-subtotal-analysis"
+ :trial/tool :openrefine
+ :trial/tags []  ; TODO: 分類タグを追加
+
+ :input/files
+ ["../../tradehub-web-backend_0107/common-app/.../WebSecurityConfig.java"
+  "../../tradehub-web-backend_0107/common-lib/.../DocumentsServiceImpl.java"
+  ...
+  "develop..sonnt-4232.diff"   ; 差分ファイル
+  "develop..sonnt-4232.stat"]  ; 統計テーブル (--include-stat の場合)
+
+ :goal ""  ; TODO: trial の目的を説明
+
+ :notes/file "notes.md"
+ :output/dir "exports"
+
+ :openrefine/url "http://172.27.160.1:3333"
+ :openrefine/project-name "2026-03-26-subtotal-analysis"
+ :openrefine/open-browser? true}
+```
+
+**オプション説明**
+
+| オプション | 説明 |
+|-----------|------|
+| `--trial-id ID` | Trial の一意な ID （必須） |
+| `--git-repo PATH` | Git リポジトリパス（デフォルト: `trials/repo`） |
+| `--git-range RANGE` | Git の範囲（例: `develop..sonnt-4232`） |
+| `--pattern GLOB` | ファイルパターン（複数指定可） |
+| `--include-diff` | git diff の完全テキストファイルを生成 |
+| `--include-stat` | git diff --stat の表形式ファイルを生成 |
+
+---
+
+## Step 2: trial.edn を編集
+
+```bash
+vim trials/2026-03-26-subtotal-analysis/trial.edn
+```
+
+最小限編集が必要な項目：
+
+- `:goal` - この trial で何を検証するか
+- `:trial/tags` - 分類タグ（例: `[:java :mapper :service]`）
+
+---
+
+## Step 3: trial を実行
+
+```bash
+./bin/run-trial trials/2026-03-26-subtotal-analysis/trial.edn
+```
+
+---
+
 # Trial の理解
 
 ## Trial ディレクトリ構成

@@ -1,0 +1,194 @@
+#!/usr/bin/env -S guix shell bash coreutils sed grep findutils -- bash
+# bin/init-trial - trial ディレクトリやスケルトン生成
+
+set -e
+
+usage() {
+  cat <<EOF
+Usage: $0 --trial-id ID [OPTIONS]
+
+Options:
+  --trial-id ID              Trial の一意な ID （必須）
+  --git-repo PATH            Git リポジトリパス (デフォルト: trials/repo)
+  --git-range RANGE          Git の範囲 (e.g., develop..sonnt-4232)
+  --pattern GLOB             ファイルパターン (複数指定可)
+  --include-diff             diff ファイルを生成
+  --include-stat             diff --stat ファイルを生成
+
+Examples:
+  # git diff ベース (カスタムリポジトリ)
+  $0 --trial-id "2026-03-26-subtotal" \
+    --git-repo "../tradehub-web-backend_0107" \
+    --git-range "develop..sonnt-4232" \
+    --include-diff
+
+  # git diff ベース (trials/repo)
+  $0 --trial-id "2026-03-26-subtotal" --git-range "develop..sonnt-4232" --include-diff
+
+  # パターン検索ベース
+  $0 --trial-id "2026-03-26-mapper" --pattern "*Mapper.java" --pattern "*ServiceImpl.java"
+
+EOF
+  exit 1
+}
+
+# 相対パスを計算する関数 (bash のみ)
+calculate_relative_path() {
+  local from="$1"
+  local to="$2"
+  
+  # 簡略化: GIT_REPO の先頭の ../ の個数を数える
+  local leading_dots=0
+  local path="$to"
+  
+  while [[ "$path" == ../* ]]; do
+    ((leading_dots++))
+    path="${path#../}"
+  done
+  
+  # from のディレクトリレベル数を数える
+  # ファイルが from ディレクトリの中にあるので、+1 する
+  local from_depth=$(($(echo "$from" | grep -o "/" | wc -l) + 1))
+  
+  # 必要な ../ の個数 = from_depth + leading_dots
+  local total_dots=$((from_depth + leading_dots))
+  local result=""
+  
+  for ((i = 0; i < total_dots; i++)); do
+    result="${result}../"
+  done
+  
+  result="${result}${path}"
+  echo "$result"
+}
+
+TRIAL_ID=""
+GIT_REPO="trials/repo"
+GIT_RANGE=""
+PATTERNS=()
+INCLUDE_DIFF=false
+INCLUDE_STAT=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --trial-id) TRIAL_ID="$2"; shift 2 ;;
+    --git-repo) GIT_REPO="$2"; shift 2 ;;
+    --git-range) GIT_RANGE="$2"; shift 2 ;;
+    --pattern) PATTERNS+=("$2"); shift 2 ;;
+    --include-diff) INCLUDE_DIFF=true; shift ;;
+    --include-stat) INCLUDE_STAT=true; shift ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+done
+
+[[ -z "$TRIAL_ID" ]] && usage
+
+TRIAL_DIR="trials/$TRIAL_ID"
+
+# ディレクトリ作成
+mkdir -p "$TRIAL_DIR"
+
+# 1. INPUT_FILES 収集
+INPUT_FILES_ARRAY=()
+
+# git diff ベースの収集
+if [[ -n "$GIT_RANGE" ]]; then
+  if [[ -d "$GIT_REPO/.git" ]]; then
+    # trial ファイルから GIT_REPO への相対パスを計算
+    RELATIVE_GIT_REPO=$(calculate_relative_path "$TRIAL_DIR" "$GIT_REPO")
+    
+    while IFS= read -r file; do
+      if [[ -n "$file" && "$file" == *.java ]]; then
+        INPUT_FILES_ARRAY+=("$RELATIVE_GIT_REPO/$file")
+      fi
+    done < <(cd "$GIT_REPO" && git diff "$GIT_RANGE" --name-only 2>/dev/null || true)
+
+    # diff ファイル生成
+    if [[ "$INCLUDE_DIFF" == true ]]; then
+      DIFF_NAME=$(echo "$GIT_RANGE" | sed 's/[^a-zA-Z0-9._-]/-/g')
+      SCRIPT_DIR=$(pwd)
+      cd "$GIT_REPO"
+      git diff "$GIT_RANGE" > "$SCRIPT_DIR/$TRIAL_DIR/${DIFF_NAME}.diff" 2>/dev/null || true
+      cd "$SCRIPT_DIR"
+      INPUT_FILES_ARRAY+=("$DIFF_NAME.diff")
+    fi
+
+    # stat ファイル生成
+    if [[ "$INCLUDE_STAT" == true ]]; then
+      STAT_NAME=$(echo "$GIT_RANGE" | sed 's/[^a-zA-Z0-9._-]/-/g').stat
+      SCRIPT_DIR=$(pwd)
+      cd "$GIT_REPO"
+      git diff "$GIT_RANGE" --stat > "$SCRIPT_DIR/$TRIAL_DIR/$STAT_NAME" 2>/dev/null || true
+      cd "$SCRIPT_DIR"
+      INPUT_FILES_ARRAY+=("$STAT_NAME")
+    fi
+  else
+    echo "⚠ Warning: $GIT_REPO is not a git repository" >&2
+  fi
+fi
+
+# パターンベースの収集
+for pattern in "${PATTERNS[@]}"; do
+  while IFS= read -r file; do
+    if [[ -n "$file" ]]; then
+      INPUT_FILES_ARRAY+=("../repo/$file")
+    fi
+  done < <(find trials/repo -name "$pattern" -type f 2>/dev/null | sed 's|^trials/repo/||' || true)
+done
+
+# INPUT_FILES を edn 形式に変換
+INPUT_FILES_EDN=""
+for file in "${INPUT_FILES_ARRAY[@]}"; do
+  INPUT_FILES_EDN="$INPUT_FILES_EDN\"$file\""$'\n'"  "
+done
+INPUT_FILES_EDN=${INPUT_FILES_EDN%$'\n'  }  # 末尾の改行スペース削除
+
+# 2. trial.edn スケルトン生成
+cat > "$TRIAL_DIR/trial.edn" <<EOF
+{:trial/id "$TRIAL_ID"
+ :trial/tool :openrefine
+ :trial/tags []  ; TODO: 分類タグを追加
+
+ :input/files
+ [$INPUT_FILES_EDN]
+
+ :goal ""  ; TODO: trial の目的を説明
+
+ :notes/file "notes.md"
+ :output/dir "exports"
+
+ :openrefine/url "http://172.27.160.1:3333"
+ :openrefine/project-name "$TRIAL_ID"
+ :openrefine/open-browser? true}
+EOF
+
+# 3. notes.md テンプレート生成
+cat > "$TRIAL_DIR/notes.md" <<EOF
+# $TRIAL_ID
+
+## goal
+
+(trial.edn から自動引用)
+
+## observation
+
+-
+
+## next
+
+-
+EOF
+
+# 4. exports ディレクトリ作成
+mkdir -p "$TRIAL_DIR/exports"
+
+# 完了メッセージ
+echo "✓ Trial initialized: $TRIAL_DIR"
+echo "  ├── trial.edn        (edit :goal and :trial/tags)"
+echo "  ├── notes.md         (edit observations)"
+echo "  └── exports/         (results directory)"
+echo ""
+echo "Next step:"
+echo "  1. Edit: vim $TRIAL_DIR/trial.edn"
+echo "  2. Run:  ./bin/run-trial $TRIAL_DIR/trial.edn"

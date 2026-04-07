@@ -25,3 +25,6 @@ Thumbs.db
 *.bak
 tmp/
 .temp/
+
+# Trial experiments (local work, not for public repo)
+trials/experiments/
