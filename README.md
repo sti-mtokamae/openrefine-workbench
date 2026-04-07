@@ -100,12 +100,46 @@ cd C:\Users\mtoka\usrapp\openrefine-3.9.5
 **バージョン更新時：**
 新しい OpenRefine ディレクトリに `start-openrefine.ps1` をコピーすれば同じように実行可能です。
 
-#### PowerShell 実行ポリシー
+#### ファイルロック解除（初回実行時）
 
-初回実行時にポリシーエラーが出た場合：
+Git clone したファイルを実行する場合、Windows がファイルをロックしていることがあります。その場合は `Unblock-File` で解除してください：
+
+```powershell
+Unblock-File -Path .\start-openrefine.ps1
+```
+
+#### PowerShell 実行ポリシーエラー
+
+実行ポリシーが厳しい場合のエラーが出た場合：
 
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+その後、スクリプトを実行：
+
+```powershell
+.\start-openrefine.ps1
+```
+
+**実行成功時の出力例：**
+
+```
+=========================================
+
+  OpenRefine Remote Start Script
+
+=========================================
+
+✓ Detected Java: C:\Program Files\Eclipse Adoptium\jdk-25.0.1.8-hotspot\bin\java.exe
+✓ Setting JAVA_HOME: C:\Program Files\Eclipse Adoptium\jdk-25.0.1.8-hotspot
+
+Starting OpenRefine...
+
+  Binding: 0.0.0.0:3333
+  WSL Access: http://172.27.160.1:3333
+
+=========================================
 ```
 
 ### 手動で起動する場合（参考）
