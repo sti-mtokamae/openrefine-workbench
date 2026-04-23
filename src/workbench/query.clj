@@ -1,6 +1,8 @@
 (ns workbench.query
   "XTDB v2 へのクエリを送る薄いラッパー。
-   SQL と XTQL の両方を受け付ける。"
+   SQL と XTQL の両方を受け付ける。
+   注意: SQL では :file/dir? のような ? 付き列名を返せないため、
+   全フィールドを取得する場合は XTQL (from :files [*]) を使うこと。"
   (:require
    [xtdb.api :as xt]))
 
@@ -9,12 +11,12 @@
 ;; -------------------------
 
 (defn q
-  "node に SQL 文字列またはベクタ形式の XTQL を送り、結果を返す。
+  "node に SQL 文字列またはシンボル形式の XTQL を送り、結果を返す。
 
-   SQL 例:
-     (query/q node \"SELECT path, ext FROM files WHERE dir = false ORDER BY path\")
+   全フィールド取得（XTQL 推奨）:
+     (query/q node '(from :files [*]))
 
-   XTQL 例（将来）:
-     (query/q node '(from :files [{:xt/id id} path ext]))"
+   SQL 例（プレーンな列名のみ使用可）:
+     (query/q node \"SELECT _id, path FROM files ORDER BY path\")"
   [node sql-or-xtql]
   (xt/q node sql-or-xtql))

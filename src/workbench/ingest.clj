@@ -2,7 +2,9 @@
   "ディレクトリ・Git 履歴などを XTDB v2 に取り込む関数群。
    Human REPL と AI Agent が同じ呼び出し面を使う。"
   (:require
-   [clojure.java.io :as io]))
+   [clojure.java.io :as io]
+   [clojure.string :as str]
+   [xtdb.api :as xt]))
 
 ;; -------------------------
 ;; helpers
