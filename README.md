@@ -21,6 +21,22 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 
 ---
 
+# 設計方針（最小3ステップ）
+
+このリポジトリは、Human REPL と AI Agent が同じ操作面を使う分析基盤として育てます。
+
+1. コマンド契約を最小定義する（`ingest` / `query` / `visualize`）
+2. clone 後の入口として、ディレクトリ構造 ingest を先に実装する
+3. ingest 結果を REPL で問い合わせ、1つ可視化してループを回す
+
+**XTDB v2 導入時のエッセンス（参考: xt-hledger-lab）**
+
+- 再現可能な実行環境を先に固定する（例: `manifest.scm` + `guix shell -m manifest.scm`）
+- ノードのライフサイクルは `with-open` で管理する
+- 書き込みは `execute-tx` を基準 API にする
+
+---
+
 # ディレクトリ構成
 
 ```
@@ -61,6 +77,10 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 - **Clojure**
   言語ランタイム
   https://clojure.org/guides/install_clojure
+
+- **GitHub CLI (gh) [任意]**
+  GitHub 連携（issue / PR / repo 操作）を CLI で行う場合に使用
+  https://cli.github.com/
 
 ---
 
