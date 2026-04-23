@@ -3,4 +3,9 @@
  :tasks
  {run-trial
   {:doc "run openrefine trial"
-   :task (apply clojure "-M" "-m" "openrefine-runner" *command-line-args*)}}}
+   :task (apply clojure "-M" "-m" "openrefine-runner" *command-line-args*)}
+
+  smoke
+  {:doc "run XTDB smoke test (ingest -> query -> visualize)"
+   :task (let [root (or (first *command-line-args*) "trials/samples/repo")]
+       (shell (str "clojure -A:xtdb -M test/smoke_test.clj " root)))}}}
