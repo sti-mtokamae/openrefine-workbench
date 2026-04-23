@@ -39,7 +39,7 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 
 - **JVM フラグが必須** — Apache Arrow の初期化に `--add-opens` が必要。`deps.edn` の `:xtdb` エイリアスに収めてある
   ```bash
-  clojure -A:xtdb -M smoke_test.clj trials/samples/repo
+  clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
   ```
 - **SQL では `?` 付き列名を返せない** — `:file/dir?` のような Clojure キーワードは SQL の SELECT 結果に出てこない。全フィールドを取得するには XTQL を使う
   ```clojure
@@ -48,7 +48,7 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
   ;; OK: XTQL なら全フィールドが返る
   (xt/q node '(from :files [*]))
   ```
-- **smoke_test.clj でループを一発確認できる** — ingest → query → visualize の3ステップが通れば設計方針の達成とみなす
+- **test/smoke_test.clj でループを一発確認できる** — ingest → query → visualize の3ステップが通れば設計方針の達成とみなす
 
 ---
 

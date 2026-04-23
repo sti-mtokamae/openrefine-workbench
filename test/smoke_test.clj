@@ -3,11 +3,7 @@
 ;; smoke_test.clj — Issue #2 動作確認スクリプト
 ;;
 ;; 実行方法:
-;;   clojure -Sdeps '{:deps {com.xtdb/xtdb-core {:mvn/version "2.1.0"}}}' \
-;;           -M smoke_test.clj trials/samples/repo
-;;
-;; または deps.edn がある場合:
-;;   clojure -M smoke_test.clj trials/samples/repo
+;;   clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
 
 (require '[clojure.java.io :as io]
          '[clojure.string :as str])
