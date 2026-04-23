@@ -27,7 +27,7 @@ jobs:
       - name: Setup Babashka
         uses: turtlequeue/setup-babashka@v1
         with:
-          version: latest
+          babashka-version: latest
 
       - name: Run smoke test
         run: bb smoke
