@@ -4,6 +4,7 @@
   (:require
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [clj-xref.core :as xref]
    [xtdb.api :as xt]))
 
 ;; -------------------------
@@ -63,3 +64,34 @@
   "任意ファイルパスのリストをドキュメントとして返す（将来実装）。"
   [_paths]
   (throw (ex-info "not implemented yet" {:fn 'ingest/files})))
+
+;; -------------------------
+;; clj-xref (Clojure cross-reference)
+;; -------------------------
+
+(defn- ref->doc [{:keys [kind from to file line col arity] :as _ref}]
+  {:xt/id        (str from "->" to "@" file ":" line)
+   :ref/kind     (str kind)
+   :ref/from     (str from)
+   :ref/to       (str to)
+   :ref/file     (str file)
+   :ref/line     line
+   :ref/col      col
+   :ref/arity    arity})
+
+(defn xref!
+  "Clojure ソースの cross-reference 解析結果を XTDB :refs テーブルに put する。
+   clj-xref (clj-kondo ベース) を使う。
+
+   paths: 解析対象パスのベクタ（例: [\"src\" \"test\"]）
+
+   例:
+     (ingest/xref! node [\"src\"])
+     (ingest/xref! node [\"src\" \"test\"])"
+  [node paths]
+  (let [db   (xref/analyze paths)
+        refs (get db :refs [])
+        txs  (mapv (fn [r] [:put-docs :refs (ref->doc r)]) refs)]
+    (when (seq txs)
+      (xt/execute-tx node txs))
+    (count txs)))

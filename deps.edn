@@ -1,8 +1,9 @@
 {:paths ["src"]
 
  :deps
- {org.clojure/clojure {:mvn/version "1.12.0"}
-  com.xtdb/xtdb-core   {:mvn/version "2.1.0"}}
+ {org.clojure/clojure                    {:mvn/version "1.12.0"}
+  com.xtdb/xtdb-core                     {:mvn/version "2.1.0"}
+  com.github.danlentz/clj-xref           {:mvn/version "0.1.1"}}
 
  :aliases
  {:xtdb

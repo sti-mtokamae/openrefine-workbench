@@ -9,9 +9,10 @@
 (defn- build-tree [docs]
   "パス文字列のリストからネスト map を組み立てる。"
   (reduce (fn [m {:keys [file/path file/dir?]}]
-            (when path
+            (if path
               (let [parts (str/split path #"/")]
-                (assoc-in m (conj (vec parts) ::leaf?) (not dir?)))))
+                (assoc-in m (conj (vec parts) ::leaf?) (not dir?)))
+              m))
           {}
           docs))
 
@@ -28,9 +29,17 @@
 ;; -------------------------
 
 (defn tree
-  "クエリ結果（:file/path を持つ map のシーケンス）をツリー表示する。
+  "クエリ結果（:file/path を持つ map のシーケンス）をツリー表示する（stdout）。
 
    例:
-     (visualize/tree (query/q node \"SELECT path, \\\"dir?\\\" FROM files ORDER BY path\"))"
+     (visualize/tree (xt/q node '(from :files [*])))"
   [result]
   (render-tree (build-tree result) ""))
+
+(defn tree-str
+  "tree と同じだが、文字列として返す（REPL / AI 向け）。
+
+   例:
+     (println (visualize/tree-str (xt/q node '(from :files [*]))))"
+  [result]
+  (with-out-str (render-tree (build-tree result) "")))
