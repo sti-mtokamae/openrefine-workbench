@@ -38,9 +38,14 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 **XTDB v2 実装時の落とし穴（2026-04-24 確認）**
 
 - **JVM フラグが必須** — Apache Arrow の初期化に `--add-opens` が必要。`deps.edn` の `:xtdb` エイリアスに収めてある
+  
+  **Guix 環境で実行（推奨）:**
   ```bash
-  bb smoke
-  # 対象ディレクトリを指定する場合
+  guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
+  ```
+  
+  **手動インストール版:**
+  ```bash
   bb smoke trials/samples/repo
   ```
 - **SQL では `?` 付き列名を返せない** — `:file/dir?` のような Clojure キーワードは SQL の SELECT 結果に出てこない。全フィールドを取得するには XTQL を使う

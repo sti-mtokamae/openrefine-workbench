@@ -13,21 +13,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
+      - name: Setup Guix
+        uses: PromyLoph/guix-install-action@master
 
-      - name: Setup Clojure
-        uses: DeLaGuardo/setup-clojure@13.4
-        with:
-          cli: latest
-
-      - name: Setup Babashka
-        uses: turtlequeue/setup-babashka@v1
-        with:
-          babashka-version: latest
-
-      - name: Run smoke test
-        run: bb smoke
+      - name: Run smoke test via Guix
+        run: guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
