@@ -44,10 +44,11 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
   guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
   ```
   
-  **手動インストール版:**
+  **代替（bb タスク利用時）:**
   ```bash
   bb smoke trials/samples/repo
   ```
+  （JVM 起動コスト削減のため、ローカル開発時のみ）
 - **SQL では `?` 付き列名を返せない** — `:file/dir?` のような Clojure キーワードは SQL の SELECT 結果に出てこない。全フィールドを取得するには XTQL を使う
   ```clojure
   ;; NG: SQL では dir? が欠落する
@@ -67,7 +68,9 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 │   ├── run-trial              # CLI ツール実行スクリプト
 │   └── start-openrefine.ps1   # Windows 用 OpenRefine 起動スクリプト
 ├── src/                       # OpenRefine runner (Clojure)
-├── bb.edn                     # Babashka タスク定義
+├── bb.edn                     # Babashka タスク定義（ローカル開発用）
+├── manifest.scm               # Guix 環境定義（CI/CD 用）
+├── deps.edn                   # Clojure 依存定義
 └── trials/
     ├── samples/               # 公開可能なサンプル trial
     │   ├── repo/              # サンプル分析対象コード
@@ -92,13 +95,24 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 
 ## 1. 事前要件
 
-- **Babashka (bb)**
-  Clojure スクリプト実行用
-  https://babashka.org/
+推奨：**Guix（環境を完全に固定したい場合）**
+```bash
+guix shell -m manifest.scm
+```
+
+代替（手動セットアップ）：
 
 - **Clojure**
   言語ランタイム
   https://clojure.org/guides/install_clojure
+
+- **OpenJDK 21+**
+  Java ランタイム
+  https://openjdk.org/
+
+- **Babashka (bb) [任意]**
+  JVM 起動コスト削減時のみ（ローカル開発用）
+  https://babashka.org/
 
 - **GitHub CLI (gh) [任意]**
   GitHub 連携（issue / PR / repo 操作）を CLI で行う場合に使用
