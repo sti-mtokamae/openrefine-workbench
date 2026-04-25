@@ -1,6 +1,6 @@
 # Build and cache
 .cpcache/
-.clj-kondo/.cache/
+.clj-kondo/
 .lsp/
 target/
 build/
