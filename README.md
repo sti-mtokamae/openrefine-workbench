@@ -35,7 +35,7 @@ ingest → query → visualize
 ;; REPL からも、AI Agent からも同じ関数を呼ぶだけ
 (require '[workbench.core :as core])
 (core/start!)
-(core/ingest! "trials/samples/repo")   ; ファイルツリー → :files テーブル
+(core/ingest! "src")                   ; ファイルツリー → :files テーブル
 (core/xref!   ["src"])                 ; Clojure xref → :refs テーブル
 (core/tree)                            ; ツリー表示
 (core/q '(from :refs [*]))             ; 任意クエリ
