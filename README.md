@@ -19,7 +19,7 @@
 
 # 設計方針
 
-**最小 3 ステップの契約**
+**最小 3 ステップの REPL ループ**
 
 ```
 ingest → query → visualize
@@ -96,23 +96,34 @@ guix shell -m manifest.scm -- clojure -A:xtdb:repl
 
 (core/start!)                          ; XTDB ノード起動
 
-(core/ingest! "trials/samples/repo")  ; ファイルツリーを :files テーブルへ
-;; => 7
+(core/ingest! "src")                   ; ファイルツリーを :files テーブルへ
+;; => 5
 
 (core/tree)                            ; ツリー表示
 ;; src/
-;;   main/
-;;     java/
-;;       com/
-;;         example/
-;;           BarService.java
-;;           FooController.java
+;;   openrefine_runner.clj
+;;   workbench/
+;;     core.clj
+;;     ingest.clj
+;;     query.clj
+;;     visualize.clj
 
-(core/xref! ["src"])                   ; Clojure cross-reference を :refs テーブルへ
-;; => 500
+(core/q '(from :files [*] (limit 1))) ; ingest! の結果を確認（:files テーブル）
+;; => [{:xt/id "src", :file/name "src", :file/path "src",
+;;      :file/dir? true, :file/size 4096}]
+
+(core/xref! ["src"])                   ; 同じ src/ を cross-reference 解析 → :refs テーブルへ
+;; => 500                              ; src/ 5 ファイルの参照レコード数（call / macroexpand 等）
 
 (core/q '(from :refs [{:ref/from from :ref/to to :ref/kind kind}]
-               (limit 3)))             ; 任意クエリ
+               (limit 3)))             ; xref! の結果を確認（:refs テーブル）
+;; => [{:ref/from "workbench.visualize/build-tree",
+;;      :ref/to   "clojure.core/vec",
+;;      :ref/kind ":call"}
+;;     {:ref/from "openrefine-runner/<top-level>",
+;;      :ref/to   "clojure.core/defn",
+;;      :ref/kind ":macroexpand"}
+;;     ...]
 
 (core/stop!)                           ; ノード停止
 ```
