@@ -1,62 +1,46 @@
 # OpenRefine Workbench
 
-> This repository documents a working setup for running OpenRefine from WSL.
-> Some setup steps are intentionally verbose because they capture pitfalls encountered during setup.
-
-OpenRefine を messy data exploration の作業台として使い、試行を trial 単位で管理します。
-
-**特徴**
-
-- OpenRefine project の自動作成
-- 試行の再現可能性（trial model）
-- WSL / Windows / OpenRefine 連携ワークフロー
+> Human REPL と AI Agent が同じ操作面を共有する、汎用データ/コード解析ワークベンチ。
 
 ---
 
-# 目的
+# 概要
 
-- OpenRefine を Java ソース分析の作業台として使う
-- trial ごとに設定 / notes / history を保存
-- WSL + Clojure からセッションを自動起動
+このリポジトリは **2 層構成**のワークベンチです。
+
+| 層 | ツール | 役割 |
+|---|---|---|
+| **探索層** | OpenRefine | messy data を GUI で手探り。試行は trial 単位で管理 |
+| **永続層** | XTDB v2 | ingest → query → visualize のループを Clojure REPL / AI Agent で操作 |
+
+どちらの層も `trial.edn` をセッション記述子として共有し、再現可能な分析を目指します。
 
 ---
 
-# 設計方針（最小3ステップ）
+# 設計方針
 
-このリポジトリは、Human REPL と AI Agent が同じ操作面を使う分析基盤として育てます。
+**最小 3 ステップの契約**
 
-1. コマンド契約を最小定義する（`ingest` / `query` / `visualize`）
-2. clone 後の入口として、ディレクトリ構造 ingest を先に実装する
-3. ingest 結果を REPL で問い合わせ、1つ可視化してループを回す
+```
+ingest → query → visualize
+```
 
-**XTDB v2 導入時のエッセンス（参考: xt-hledger-lab）**
+1. `ingest` — ファイルツリーや Clojure cross-reference を XTDB に取り込む
+2. `query` — XTQL / SQL でデータを問い合わせる
+3. `visualize` — 結果をツリーや表で見る
 
-- 再現可能な実行環境を先に固定する（例: `manifest.scm` + `guix shell -m manifest.scm`）
-- ノードのライフサイクルは `with-open` で管理する
-- 書き込みは `execute-tx` を基準 API にする
+**Human REPL と AI Agent が同じ操作面を使う**
 
-**XTDB v2 実装時の落とし穴（2026-04-24 確認）**
-
-- **JVM フラグが必須** — Apache Arrow の初期化に `--add-opens` が必要。`deps.edn` の `:xtdb` エイリアスに収めてある
-  
-  **Guix 環境で実行（推奨）:**
-  ```bash
-  guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
-  ```
-  
-  **代替（bb タスク利用時）:**
-  ```bash
-  bb smoke trials/samples/repo
-  ```
-  （JVM 起動コスト削減のため、ローカル開発時のみ）
-- **SQL では `?` 付き列名を返せない** — `:file/dir?` のような Clojure キーワードは SQL の SELECT 結果に出てこない。全フィールドを取得するには XTQL を使う
-  ```clojure
-  ;; NG: SQL では dir? が欠落する
-  (xt/q node "SELECT * FROM files")
-  ;; OK: XTQL なら全フィールドが返る
-  (xt/q node '(from :files [*]))
-  ```
-- **test/smoke_test.clj でループを一発確認できる** — ingest → query → visualize の3ステップが通れば設計方針の達成とみなす
+```clojure
+;; REPL からも、AI Agent からも同じ関数を呼ぶだけ
+(require '[workbench.core :as core])
+(core/start!)
+(core/ingest! "trials/samples/repo")   ; ファイルツリー → :files テーブル
+(core/xref!   ["src"])                 ; Clojure xref → :refs テーブル
+(core/tree)                            ; ツリー表示
+(core/q '(from :refs [*]))             ; 任意クエリ
+(core/stop!)
+```
 
 ---
 
@@ -65,11 +49,20 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
 ```
 .
 ├── bin/
-│   ├── run-trial              # CLI ツール実行スクリプト
+│   ├── init-trial             # trial.edn スケルトン生成
+│   ├── run-trial              # OpenRefine trial 実行
 │   └── start-openrefine.ps1   # Windows 用 OpenRefine 起動スクリプト
-├── src/                       # OpenRefine runner (Clojure)
+├── src/
+│   ├── openrefine_runner.clj  # OpenRefine API クライアント
+│   └── workbench/
+│       ├── core.clj           # REPL / AI Agent 統合エントリポイント
+│       ├── ingest.clj         # dir! / xref! — XTDB への取り込み
+│       ├── query.clj          # q — XTDB クエリ薄ラッパー
+│       └── visualize.clj      # tree / tree-str — 結果の可視化
+├── test/
+│   └── smoke_test.clj         # ingest → query → visualize の動作確認
 ├── bb.edn                     # Babashka タスク定義（ローカル開発用）
-├── manifest.scm               # Guix 環境定義（CI/CD 用）
+├── manifest.scm               # Guix 環境定義（推奨実行環境）
 ├── deps.edn                   # Clojure 依存定義
 └── trials/
     ├── samples/               # 公開可能なサンプル trial
@@ -77,17 +70,126 @@ OpenRefine を messy data exploration の作業台として使い、試行を tr
     │   ├── test-csv-import/   # サンプル trial: CSV インポート
     │   ├── test-trim/         # サンプル trial: テキスト整形
     │   └── 2026-03-06-java-scope-001/  # サンプル trial: Java 分析例
-    │
     └── experiments/           # ローカル作業用（.gitignore で除外）
-        ├── 2026-03-26-subtotal/           # 実際のプロジェクト分析
-        ├── 2026-03-26-subtotal-diff/      # 差分分析
-        └── 2026-03-26-test-init/          # 初期化試験
 ```
 
 **構成方針:**
 - `trials/samples/` — 公開リポジトリに含まれる（ツール例・ドキュメント用）
 - `trials/experiments/` — `.gitignore` で除外（実際のソースコード含む）
-- バージョン更新時も構造は変わらない
+
+---
+
+---
+
+# クイックスタート
+
+## A. XTDB ワークベンチ（Clojure REPL）
+
+```bash
+# Guix 環境で nREPL 起動
+guix shell -m manifest.scm -- clojure -A:xtdb:repl
+```
+
+```clojure
+;; REPL から
+(require '[workbench.core :as core])
+
+(core/start!)                          ; XTDB ノード起動
+
+(core/ingest! "trials/samples/repo")  ; ファイルツリーを :files テーブルへ
+;; => 7
+
+(core/tree)                            ; ツリー表示
+;; src/
+;;   main/
+;;     java/
+;;       com/
+;;         example/
+;;           BarService.java
+;;           FooController.java
+
+(core/xref! ["src"])                   ; Clojure cross-reference を :refs テーブルへ
+;; => 500
+
+(core/q '(from :refs [{:ref/from from :ref/to to :ref/kind kind}]
+               (limit 3)))             ; 任意クエリ
+
+(core/stop!)                           ; ノード停止
+```
+
+**smoke test（動作確認）:**
+
+```bash
+guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
+```
+
+## B. OpenRefine trial（GUI 探索）
+
+OpenRefine が起動済みの前提で：
+
+```bash
+# サンプル trial を実行
+./bin/run-trial trials/samples/test-csv-import/trial.edn
+
+# 新しい trial を初期化
+./bin/init-trial --trial-id "my-analysis" --pattern "*.java"
+./bin/run-trial trials/experiments/my-analysis/trial.edn
+```
+
+OpenRefine の起動手順は後述の [Setup](#setup) を参照。
+
+---
+
+# XTDB ワークベンチ詳細
+
+## workbench.core API
+
+| 関数 | 説明 |
+|---|---|
+| `(core/start!)` | XTDB ノードを起動（インメモリ） |
+| `(core/stop!)` | ノードを停止 |
+| `(core/ingest! root)` | ディレクトリ以下を `:files` テーブルへ |
+| `(core/xref! paths)` | Clojure ソースを解析して `:refs` テーブルへ |
+| `(core/q xtql)` | XTQL / SQL クエリを実行 |
+| `(core/tree)` | `:files` テーブルをツリー表示（stdout） |
+| `(core/tree-str)` | `tree` の文字列版（AI Agent / テスト向け） |
+
+## テーブルスキーマ
+
+**`:files` テーブル**（`ingest!` で投入）
+
+| フィールド | 説明 |
+|---|---|
+| `:xt/id` | ファイルパス（文字列） |
+| `:file/path` | パス |
+| `:file/name` | ファイル名 |
+| `:file/dir?` | ディレクトリなら true |
+
+**`:refs` テーブル**（`xref!` で投入）
+
+| フィールド | 説明 |
+|---|---|
+| `:xt/id` | `from->to@file:line` |
+| `:ref/from` | 呼び出し元シンボル（文字列） |
+| `:ref/to` | 呼び出し先シンボル（文字列） |
+| `:ref/kind` | `:call` / `:reference` / `:macroexpand` など（文字列） |
+| `:ref/file` | ソースファイルパス |
+| `:ref/line` / `:ref/col` | 位置情報 |
+| `:ref/arity` | 引数の数 |
+
+## XTDB v2 実装時の落とし穴
+
+- **JVM フラグが必須** — Apache Arrow の初期化に `--add-opens` が必要。`deps.edn` の `:xtdb` エイリアスに収めてある
+
+- **SQL では `?` 付き列名を返せない** — `:file/dir?` のような Clojure キーワードは SQL の SELECT 結果に出てこない。XTQL を使う
+  ```clojure
+  ;; NG: SQL では dir? が欠落する
+  (xt/q node "SELECT * FROM files")
+  ;; OK: XTQL なら全フィールドが返る
+  (xt/q node '(from :files [*]))
+  ```
+
+- **XTDB に保存できる型** — `clojure.lang.Symbol` は直接保存不可。`(str sym)` で文字列に変換すること
 
 ---
 
@@ -630,146 +732,24 @@ operations.json (seed-history)
 
 ---
 
-# 次のステップ
+# 現在の実装状況
 
-## 現在の段階（Phase 1: Project 自動作成）
+## XTDB ワークベンチ
 
-✅ 実装済み：
+| 機能 | 状態 |
+|---|---|
+| `ingest!` — ファイルツリー → `:files` | ✅ 実装済み |
+| `xref!` — Clojure cross-reference → `:refs` | ✅ 実装済み |
+| `q` — XTQL クエリ | ✅ 実装済み |
+| `tree` / `tree-str` — ツリー表示 | ✅ 実装済み |
+| `core.clj` — REPL / AI Agent エントリポイント | ✅ 実装済み |
 
-- trial.edn を共通データモデルで正規化
-- OpenRefine への接続確認
-- Project の自動作成
-- ブラウザの自動起動
+## OpenRefine trial ワークフロー
 
-**この段階の役割：**
-workbench の最初のコネクタとして、trial セッションを OpenRefine で起動する入口を用意
+| 機能 | 状態 |
+|---|---|
+| `run-trial` — project 自動作成 + ブラウザ起動 | ✅ 実装済み |
+| `orcli transform` — seed-history 自動適用 | ✅ 実装済み |
+| `orcli export` — TSV/CSV 出力 | ✅ 実装済み |
+| `init-trial` — trial.edn スケルトン生成 | ✅ 実装済み |
 
----
-
-## 次の段階（Phase 2: CLI による自動化テスト）
-
-✅ 実装完了：
-
-- `orcli` (OpenRefine Bash CLI) を統合
-- `seed-history.json` の自動適用機能
-- orcli の `transform` コマンドで複数操作を順序実行
-- 実際の trial で動作確認済み
-
-**この段階の構成：**
-```
-Phase 1: Project 作成 (REST API)
-    ↓
-Phase 2: Operations 適用 (orcli)
-    ↓
-Phase 3: Results 出力 (orcli export)
-```
-
-**実装詳細：**
-- [src/openrefine_runner.clj](src/openrefine_runner.clj) に以下関数を装備
-  - `apply-operations!` - orcli transform を実行して seed-history を apply
-  - `export-results!` - orcli export で TSV/CSV など形式で出力
-  - 環境変数 `OPENREFINE_URL` で OpenRefine 接続先を制御
-
-**試行実績：**
-- Trial: `2026-03-06-java-scope-001`
-  - 入力: FooController.java, BarService.java
-  - 中間: OpenRefine で rename-column 操作
-  - 出力: exports/java-scope-001.tsv (101 bytes)
-  - 🎉 完全成功
-
----
-
-## 次の段階（Phase 3: Multi-tool Workbench）
-
-🚀 設計中：
-
-1. **Tablecloth (Clojure) による処理定着**
-   - seed-history JSON → Clojure 関数に変換
-   - クライアント側で再実行可能に
-
-2. **複数ツール対応**
-   - OpenRefine の次のステップ： Tablecloth / code-slice など
-   - trial.edn の `:trial/tool` で柔軟に切り替え可能に設計
-
-3. **長期ビジョン**
-   - Unix pipes + Lisp data = Simple Made Easy
-   - trial → tool chains → reproducible analysis
-
-3. **CLI が足りなければ**
-   - `fetch-csrf-token` / `multipart-body` / `create-project!` の API 直叩き実装に降りる
-   - CSRF token 処理をきちんと組む
-
-**判断基準：**
-- CLI がある → **まずそれを試す**
-- CLI で欠ける部分が出る → **その部分だけ API に降りる**
-- コードを先に書くのではなく → **可能性を検証してから実装**
-
----
-
-## 将来の拡張（Phase 3: Workbench の多ツール対応）
-
-🚀 設計目標：
-
-trial.edn は OpenRefine 専用ではなく、workbench の共通セッション記述です。
-
-**拡張の想定：**
-
-```edn
-{:trial/id "..."
- :trial/tool :openrefine  ; ← これを切り替え可能に
- ...}
-```
-
-↓ 将来は
-
-```edn
-{:trial/id "..."
- :trial/tool :tablecloth   ; Clojure で定着化
- :tablecloth/script "scripts/analyze.clj"
- ...}
-```
-
-```edn
-{:trial/id "..."
- :trial/tool :code-slice   ; code analysis
- :code-slice/query "method-calls"
- ...}
-```
-
-これが可能な理由：
-
-- trial.edn の上半分（`:trial/id`, `:goal`, `:input/files`, `:output/dir` など）は tool に依存しない
-- 下半分（`:openrefine/url`, `:tablecloth/script` など）は tool ごとの拡張
-- runner は `:trial/tool` で backend を分岐
-
-**こうすることで：**
-
-- openrefine-runner が単なる CLI wrapper にならない
-- Clojure workbench の中が Unix 的に組み合わさる
-- explore (OpenRefine) → stabilize (Tablecloth) の流れが自然に
-
----
-
-# 設計の本質
-
-> simple made easy を目指す
-
-**OpenRefine の役割：**
-- Easy : GUI での直感的な探索・試行錯誤
-
-**Tablecloth / Clojure の役割：**
-- Simple : 再実行可能・理解可能なコード化
-
-**trial.edn の役割：**
-- 探索セッションをオブジェクト化
-- Easy → Simple への橋渡し
-
-**このリポジトリの意図：**
-
-これは
-
-- OpenRefine automation ツール ではなく
-- **Clojure data workbench の最初のコネクタ**
-
-つまり、ここから Tablecloth や code-slice が接続されるようになったとき、
-`trial.edn` が全体をつなぐ接着剤になる設計です。
