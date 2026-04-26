@@ -1,0 +1,4 @@
+{:trial/id   "aca-spring"
+ :trial/tool :xtdb
+ :input/dirs ["src/main/java"]
+ :goal       "aca-learning/spring-hello の Java ソースを jref! で解析し、Controller/Service/Security 層の呼び出しグラフを確認する"}

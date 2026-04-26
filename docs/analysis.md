@@ -216,6 +216,54 @@ workbench.jref/jref!
 
 `core/refs` に名前空間フィルタを組み合わせると範囲を絞れる：
 
+### Java での call-tree（`trials/samples/aca-spring`）
+
+```clojure
+(core/ingest! "trials/samples/aca-spring/src/main/java")
+(core/jref!   ["trials/samples/aca-spring/src/main/java"])
+(let [refs (core/q '(from :refs [{:ref/from from :ref/to to}]))]
+  (core/call-tree refs "AuthController/login"))
+```
+
+```
+AuthController/login
+  Map.of
+  Map.of [...]
+  ResponseEntity.ok
+  ResponseEntity.status
+  ResponseEntity.status(HttpStatus.UNAUTHORIZED).body
+  credentials.get
+  credentials.get [...]
+  jwtProvider.generateToken
+  passwordEncoder.matches
+  userDetails.getPassword
+  userDetailsService.loadUserByUsername
+```
+
+`Map.of` / `credentials.get` が `[...]` になっているのは同一ノードの再展開抑制。
+fanout 11 は認証フローをこの 1 関数で処理していることを示す。
+
+```clojure
+(core/call-tree refs "JwtAuthenticationFilter/doFilterInternal")
+```
+
+```
+JwtAuthenticationFilter/doFilterInternal
+  List.of
+  SecurityContextHolder.getContext
+  SecurityContextHolder.getContext().setAuthentication
+  authHeader.startsWith
+  authHeader.substring
+  filterChain.doFilter
+  jwtProvider.extractUsername
+  jwtProvider.isTokenValid
+  request.getHeader
+```
+
+`jwtProvider.*` は `@Autowired` フィールドだが、**明示的メソッド呼び出しは取れる**。
+
+
+
 ```clojure
 (core/call-tree (core/refs "workbench.core") "workbench.core/tree")
 ```
@@ -253,11 +301,38 @@ workbench.core/tree
 
 `jref!` と `xref!` は同じ `:refs` テーブルに入るため、言語を跨いだ検索ができる。
 
+**サンプル**: `trials/samples/aca-spring/` には `HelloController → ClojureHelloService`  
+（Java→Clojure ブリッジ）が含まれる。
+
 ```clojure
-;; Java と Clojure の呼び出しを混在で取得（:ref/file 拡張子で区別）
+;; Java ソースを jref! で取り込む
+(core/ingest! "trials/samples/aca-spring/src/main/java")
+(core/jref!   ["trials/samples/aca-spring/src/main/java"])
+
+;; Clojure ソースも xref! で取り込む（同じ :refs テーブルへ）
+(core/ingest! "src")
+(core/xref!   ["src"])
+```
+
+```clojure
+;; Java 側の HelloController から Clojure 側まで call-tree で追う
+(let [refs (core/q '(from :refs [{:ref/from from :ref/to to}]))]
+  (core/call-tree refs "HelloController/hello"))
+
+;; =>
+;; HelloController/hello
+;;   clojureHelloService.hello   ← Java→Clojure ブリッジ（葉で止まる）
+```
+
+> **注意**: `clojureHelloService.hello` は Java 側の `:ref/to` 。  
+> Clojure 側の `hello-payload` まで繋がらない。シンボルが一致しないためクロスは困難。  
+> Java→Clojure ブリッジの存在確認には `:ref/file` 拡張子で区別するクエリが有効：
+
+```clojure
+;; .java ファイルからの呼び出しのうち、to に "Clojure.var" を含むもの
 (core/q '(from :refs [{:ref/from from :ref/to to :ref/file file}]
-               (where (or (like file "%.java")
-                          (like file "%.clj")))))
+               (where (like file "%.java"))))
+;; ClojureHelloService/<init> → Clojure.var (×4) が確認できる
 ```
 
 ---
@@ -269,7 +344,10 @@ workbench.core/tree
 | `:ref/to` の精度 | スコープ付き単純名（例: `System.out.println`）。完全修飾名ではない |
 | シンボル解決 | JavaParser のシンボルリゾルバを使っていないため、型情報はない |
 | インタフェース/継承 | 呼び出し先の実装クラスは特定できない |
-| Clojure `xref!` との差 | `xref!` は完全修飾シンボルを持つ。Java はクラス名ベースのため混在クエリは file 拡張子で区別する |
+| DI / `@Autowired` | 注入の依存関係は取れない。フィールド経由の**メソッド呼び出し**は取れる |
+| method chaining | `a.b().c().d()` が中間ノードごとに個別エントリになる（ノイズ増） |
+| Java→Clojure 横断 | `clojureHelloService.hello` 止まり。Clojure 側の関数名と一致しない |
+| Clojure `xref!` との差 | `xref!` は完全修飾シンボルを持つ。Java はクラス名ベースのため混在クエリは `:ref/file` 拡張子で区別する |
 
 ---
 
