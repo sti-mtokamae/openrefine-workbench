@@ -143,7 +143,44 @@ core/tree     → visualize/tree → visualize/render-tree（再帰）
 
 ---
 
-## 4. ファイルツリーと結合する
+## 4. 呼び出し木を表示する
+
+```clojure
+(core/call-tree (core/refs) "workbench.core/ingest!")
+```
+
+```
+workbench.core/ingest!
+  workbench.core/node
+    workbench.core/state
+  workbench.ingest/dir!
+    workbench.ingest/dir
+      workbench.ingest/file->doc
+```
+
+名前空間を絞り込んでから木を承ることもできる：
+
+```clojure
+(core/call-tree (core/refs "workbench.core") "workbench.core/tree")
+```
+
+```
+workbench.core/tree
+  workbench.core/q
+    workbench.core/node
+      workbench.core/state
+    workbench.query/q
+  workbench.visualize/tree
+    workbench.visualize/build-tree
+    workbench.visualize/render-tree
+      workbench.visualize/render-tree
+```
+
+> **ヒント**: `render-tree` の自己参照（再帰）は `visited` で橉 1 段で止まる。
+
+---
+
+## 5. ファイルツリーと結合する
 
 `:files` と `:refs` を `:ref/file` で結合してディレクトリ単位で集計できる。
 
@@ -158,7 +195,7 @@ core/tree     → visualize/tree → visualize/render-tree（再帰）
 
 ---
 
-## 5. Java と Clojure を横断して見る
+## 6. Java と Clojure を横断して見る
 
 `jref!` と `xref!` は同じ `:refs` テーブルに入るため、言語を跨いだ検索ができる。
 
@@ -171,7 +208,7 @@ core/tree     → visualize/tree → visualize/render-tree（再帰）
 
 ---
 
-## 6. 限界と注意点
+## 7. 限界と注意点
 
 | 項目 | 内容 |
 |---|---|
@@ -182,7 +219,7 @@ core/tree     → visualize/tree → visualize/render-tree（再帰）
 
 ---
 
-## 7. 後片付け
+## 8. 後片付け
 
 ```clojure
 (core/stop!)

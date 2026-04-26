@@ -17,6 +17,8 @@ REPL / AI Agent 向けの統合エントリポイント。
 | `(core/tree-str)` | `tree` の文字列版（AI Agent / テスト向け） |
 | `(core/refs)` | プロジェクト内部の呼び出しグラフ（ノイズフィルタ済み） |
 | `(core/refs ns-prefix)` | `ns-prefix` で始まる名前空間の呼び出しグラフのみ |
+| `(core/call-tree refs root)` | `root` を起点に呼び出し木をテキスト表示（stdout） |
+| `(core/call-tree-str refs root)` | `call-tree` の文字列版（AI Agent / テスト向け） |
 
 ### 使用例
 
@@ -41,6 +43,10 @@ REPL / AI Agent 向けの統合エントリポイント。
 ;; 呼び出しグラフ（プロジェクト内部のみ・ノイズ除外済み）
 (core/refs)                        ; => [{:from "ns/fn" :to "ns/fn" ...} ...]
 (core/refs "workbench.core")       ; workbench.core 名前空間の呼び出しのみ
+
+;; 呼び出し木を表示
+(core/call-tree (core/refs) "workbench.core/ingest!")   ; stdout に木表示
+(core/call-tree-str (core/refs) "workbench.core/tree")  ; 文字列として取得
 
 ;; ツリー表示
 (core/tree)

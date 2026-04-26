@@ -115,3 +115,18 @@
   "tree と同じだが文字列として返す（AI Agent / テスト向け）。"
   []
   (visualize/tree-str (q '(from :files [*]))))
+
+(defn call-tree
+  "refs を起点に呼び出し木をテキスト表示する（stdout）。
+   refs は (refs) や (refs ns-prefix) の出力を渡す。
+
+   例:
+     (call-tree (refs) \"workbench.core/ingest!\")
+     (call-tree (refs \"workbench.core\") \"workbench.core/tree\")"
+  [refs root]
+  (visualize/call-tree refs root))
+
+(defn call-tree-str
+  "call-tree と同じだが文字列として返す（AI Agent / テスト向け）。"
+  [refs root]
+  (visualize/call-tree-str refs root))

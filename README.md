@@ -138,6 +138,7 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `q` — XTQL クエリ | ✅ |
 | `tree` / `tree-str` — ツリー表示 | ✅ |
 | `refs` — 内部呼び出しグラフ（ノイズフィルタ付き） | ✅ |
+| `call-tree` / `call-tree-str` — 呼び出し木表示 | ✅ |
 
 ### OpenRefine trial ワークフロー
 
