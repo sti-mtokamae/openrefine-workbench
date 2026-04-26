@@ -60,6 +60,7 @@ ingest → query → visualize
 ├── test/
 │   └── smoke_test.clj
 ├── docs/
+│   ├── analysis.md            # Java/Clojure 解析 end-to-end・クエリ例
 │   ├── api.md                 # workbench.core API・スキーマ詳細
 │   ├── trial.md               # Trial ワークフロー詳細
 │   └── setup.md               # 環境セットアップ詳細
