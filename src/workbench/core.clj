@@ -11,6 +11,7 @@
      (stop!)"
   (:require
    [workbench.ingest    :as ingest]
+   [workbench.jref      :as jref]
    [workbench.query     :as query]
    [workbench.visualize :as visualize]
    [xtdb.node           :as xtn]))
@@ -62,6 +63,15 @@
   [paths]
   (ingest/xref! (node) paths))
 
+(defn jref!
+  "Java ソースを cross-reference 解析して XTDB :refs テーブルに取り込む。
+   JavaParser (静的解析) を使う。
+
+   例:
+     (jref! [\"trials/samples/repo\"])
+     (jref! [\"src/main/java\"])"
+  [paths]
+  (jref/jref! (node) paths))
 ;; -------------------------
 ;; query
 ;; -------------------------
