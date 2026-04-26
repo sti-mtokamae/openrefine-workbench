@@ -137,6 +137,7 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `jref!` — Java cross-reference → `:refs`（JavaParser） | ✅ |
 | `q` — XTQL クエリ | ✅ |
 | `tree` / `tree-str` — ツリー表示 | ✅ |
+| `refs` — 内部呼び出しグラフ（ノイズフィルタ付き） | ✅ |
 
 ### OpenRefine trial ワークフロー
 

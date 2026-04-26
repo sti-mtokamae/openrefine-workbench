@@ -15,6 +15,8 @@ REPL / AI Agent 向けの統合エントリポイント。
 | `(core/q xtql)` | XTQL / SQL クエリを実行 |
 | `(core/tree)` | `:files` テーブルをツリー表示（stdout） |
 | `(core/tree-str)` | `tree` の文字列版（AI Agent / テスト向け） |
+| `(core/refs)` | プロジェクト内部の呼び出しグラフ（ノイズフィルタ済み） |
+| `(core/refs ns-prefix)` | `ns-prefix` で始まる名前空間の呼び出しグラフのみ |
 
 ### 使用例
 
@@ -35,6 +37,10 @@ REPL / AI Agent 向けの統合エントリポイント。
 ;; クエリ
 (core/q '(from :files [*] (limit 1)))
 (core/q '(from :refs [{:ref/from from :ref/to to :ref/kind kind}] (limit 3)))
+
+;; 呼び出しグラフ（プロジェクト内部のみ・ノイズ除外済み）
+(core/refs)                        ; => [{:from "ns/fn" :to "ns/fn" ...} ...]
+(core/refs "workbench.core")       ; workbench.core 名前空間の呼び出しのみ
 
 ;; ツリー表示
 (core/tree)
