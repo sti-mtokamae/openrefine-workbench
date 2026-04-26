@@ -1,0 +1,12 @@
+{:trial/id   "self-analysis"
+ :trial/tool :xtdb
+ :trial/tags [:clojure :xref :self-referential]
+
+ ;; このワークベンチ自身のソースを解析対象にする
+ ;; REPL（実行中のワークベンチ）が自分自身のコードを読み込む
+ :input/dirs ["../../src"]
+
+ :goal "workbench 自身の呼び出しグラフを可視化する"
+
+ :notes/file "notes.md"
+ :output/dir "exports"}

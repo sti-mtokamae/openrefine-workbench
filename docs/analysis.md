@@ -1,6 +1,10 @@
 # コード解析 end-to-end ガイド
 
-Java / Clojure のソースコードを XTDB に取り込み、クエリで読み解く一連の流れ。
+Clojure / Java のソースコードを XTDB に取り込み、クエリで読み解く一連の流れ。
+
+**サンプルとして、このワークベンチ自身のソース（`src/`）を解析する。**  
+実行中の REPL が自分自身のコードを読み込む構造—いわばデバッガで自分をデバッグする形。  
+（詳細: [trials/samples/self-analysis/notes.md](../trials/samples/self-analysis/notes.md)）
 
 ---
 
@@ -19,79 +23,114 @@ guix shell -m manifest.scm -- clojure -A:xtdb:repl
 
 ## 1. データを投入する
 
-### Java ソース
-
 ```clojure
-(core/ingest! "trials/samples/repo")          ; ファイルツリー → :files
-(core/jref!   ["trials/samples/repo"])         ; メソッド呼び出し → :refs
+(core/ingest! "src")    ; ファイルツリー → :files
+(core/xref!   ["src"])  ; 呼び出しグラフ → :refs
 ```
 
-### Clojure ソース（混在もできる）
+Java ソースが混在する場合：
 
 ```clojure
-(core/ingest! "src")
-(core/xref!   ["src"])
+(core/ingest! "trials/samples/repo")
+(core/jref!   ["trials/samples/repo"])  ; Java xref → 同じ :refs テーブルへ
 ```
 
 ---
 
 ## 2. 何が入ったか確認する
 
-### ファイルツリーを見る
-
 ```clojure
 (core/tree)
 ```
 
 ```
-trials/samples/repo/
-  src/
-    main/
-      java/
-        com/
-          example/
-            BarService.java   (167 B)
-            FooController.java (143 B)
-```
-
-### :refs テーブルの全件
-
-```clojure
-(core/q '(from :refs [*]))
+src/
+  openrefine_runner.clj
+  workbench/
+    core.clj
+    ingest.clj
+    jref.clj
+    query.clj
+    visualize.clj
 ```
 
 ```clojure
-;; => [{:xt/id    "BarService/bar->System.out.println@src/main/java/com/example/BarService.java:5"
-;;      :ref/from "BarService/bar"
-;;      :ref/to   "System.out.println"
-;;      :ref/kind ":call"
-;;      :ref/file "src/main/java/com/example/BarService.java"
-;;      :ref/line 5
-;;      :ref/col  8
-;;      :ref/arity 1}]
+;; :refs の先頭3件
+(core/q '(from :refs [{:ref/from from :ref/to to :ref/file file}]
+               (order-by from)
+               (limit 3)))
+
+;; => [{:from "openrefine-runner/<top-level>" :to "clojure.core/defn"
+;;      :file "src/openrefine_runner.clj"}
+;;     {:from "openrefine-runner/apply-operations!" :to "clojure.core/."
+;;      :file "src/openrefine_runner.clj"}
+;;     {:from "openrefine-runner/create-project!" :to "clojure.core/ex-info"
+;;      :file "src/openrefine_runner.clj"}]
 ```
 
 ---
 
 ## 3. 基本クエリ
 
-### 特定クラスが呼んでいるもの（ファンアウト）
+### プロジェクト内部の呼び出しのみ（`clojure.core` を除外）
 
 ```clojure
-(core/q '(from :refs [{:ref/from from :ref/to to :ref/file file :ref/line line}]
-               (where (like from "BarService/%"))
-               (order-by line)))
+(core/q '(from :refs [{:ref/from from :ref/to to :ref/file file}]
+               (where (not (like to "clojure.%")))
+               (order-by from)))
 ```
 
+実際の結果（抜粋）：
+
 ```clojure
-;; => [{:from "BarService/bar" :to "System.out.println" :file "..." :line 5}]
+;; [{:from "openrefine-runner/export-results!" :to "openrefine-runner/http-client" ...}
+;;  {:from "openrefine-runner/fetch-csrf-token" :to "openrefine-runner/http-get-text" ...}
+;;  {:from "openrefine-runner/normalize-trial"  :to "openrefine-runner/input-files" ...}
+;;  {:from "openrefine-runner/normalize-trial"  :to "openrefine-runner/resolve-path" ...}
+;;  {:from "openrefine-runner/run-trial"        :to "openrefine-runner/create-project!" ...}
+;;  {:from "openrefine-runner/run-trial"        :to "openrefine-runner/open-browser!" ...}
+;;  {:from "workbench.core/ingest!"  :to "workbench.ingest/dir!" ...}
+;;  {:from "workbench.core/jref!"    :to "workbench.jref/jref!" ...}
+;;  {:from "workbench.core/q"        :to "workbench.query/q" ...}
+;;  {:from "workbench.core/tree"     :to "workbench.visualize/tree" ...}
+;;  {:from "workbench.ingest/dir!"   :to "workbench.ingest/dir" ...}
+;;  {:from "workbench.ingest/xref!"  :to "clj-xref.core/analyze" ...}
+;;  {:from "workbench.jref/call->doc" :to "workbench.jref/from-sym" ...}
+;;  {:from "workbench.jref/from-sym"  :to "workbench.jref/find-ancestor" ...}
+;;  {:from "workbench.jref/parse-file" :to "workbench.jref/call->doc" ...}
+;;  {:from "workbench.visualize/render-tree" :to "workbench.visualize/render-tree" ...}  ; 再帰
+;;  {:from "workbench.visualize/tree" :to "workbench.visualize/render-tree" ...}]
 ```
 
-### 特定メソッドを呼んでいる箇所（ファンイン / 使用箇所検索）
+これが `workbench.core` の委譲構造です：
+
+```
+core/ingest!  → ingest/dir!
+core/xref!    → ingest/xref!  → clj-xref.core/analyze
+core/jref!    → jref/jref!
+core/q        → query/q
+core/tree     → visualize/tree → visualize/render-tree（再帰）
+```
+
+### 特定関数のファンアウト（何を呼んでいるか）
 
 ```clojure
-(core/q '(from :refs [{:ref/from from :ref/to to :ref/file file :ref/line line}]
-               (where (= to "System.out.println"))))
+(core/q '(from :refs [{:ref/from from :ref/to to}]
+               (where (= from "workbench.core/ingest!"))
+               (order-by to)))
+
+;; => [{:from "workbench.core/ingest!" :to "workbench.core/node"}
+;;     {:from "workbench.core/ingest!" :to "workbench.ingest/dir!"}]
+```
+
+### 特定関数のファンイン（誰から呼ばれているか）
+
+```clojure
+(core/q '(from :refs [{:ref/from from :ref/to to}]
+               (where (= to "workbench.ingest/dir!"))
+               (order-by from)))
+
+;; => [{:from "workbench.core/ingest!" :to "workbench.ingest/dir!"}]
 ```
 
 ### ファイル別の呼び出し数
@@ -106,17 +145,16 @@ trials/samples/repo/
 
 ## 4. ファイルツリーと結合する
 
-`:files` テーブルと `:refs` テーブルを `:ref/file` で結合すると、
-パッケージ / ディレクトリ単位の分析ができる。
+`:files` と `:refs` を `:ref/file` で結合してディレクトリ単位で集計できる。
 
 ```clojure
-(core/q '(unify (from :refs    [{:ref/from from :ref/to to :ref/file rfile}])
-                (from :files   [{:xt/id fid :file/parent parent}]
-                       (where (= fid rfile))))
-         )
+(core/q '(unify (from :refs  [{:ref/from from :ref/to to :ref/file rfile}]
+                      (where (not (like to "clojure.%"))))
+                (from :files [{:xt/id fid :file/parent parent}]
+                      (where (= fid rfile)))))
 ```
 
-> **注意**: `(unify ...)` は XTDB v2 の join 構文。`(join ...)` ではない。
+> **注意**: XTDB v2 の join 構文は `(unify ...)` を使う。`(join ...)` ではない。
 
 ---
 
