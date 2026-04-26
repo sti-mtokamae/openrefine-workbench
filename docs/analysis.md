@@ -141,6 +141,41 @@ core/tree     → visualize/tree → visualize/render-tree（再帰）
                (order-by (desc count))))
 ```
 
+### ファンアウト/ファンイン集計（Clojure 側でまとめる）
+
+XTDB の `aggregate` より柔軟。`core/refs` の戻り値（seq of map）を直接操作する。
+
+```clojure
+;; ファンアウト TOP — 何を多く呼ぶ関数か
+(->> (core/refs)
+     (group-by :from)
+     (map (fn [[k v]] {:from k :fanout (count v)}))
+     (sort-by :fanout >)
+     (take 5))
+
+;; => [{:from "openrefine-runner/normalize-trial" :fanout 18}
+;;     {:from "openrefine-runner/run-trial"        :fanout 9}
+;;     {:from "openrefine-runner/multipart-body"   :fanout 6}
+;;     {:from "openrefine-runner/create-project!"  :fanout 3}
+;;     {:from "workbench.jref/call->doc"           :fanout 3}]
+
+;; ファンイン TOP — 誰から多く呼ばれる関数か
+(->> (core/refs)
+     (group-by :to)
+     (map (fn [[k v]] {:to k :fanin (count v)}))
+     (sort-by :fanin >)
+     (take 5))
+
+;; => [{:to "openrefine-runner/utf8-bytes"   :fanin 6}
+;;     {:to "workbench.core/state"            :fanin 5}
+;;     {:to "workbench.core/node"             :fanin 4}
+;;     {:to "openrefine-runner/resolve-path"  :fanin 4}
+;;     {:to "workbench.visualize/render-tree" :fanin 3}]
+```
+
+`normalize-trial`（fanout 18）が突出 → 責務が広い関数の目印。  
+`utf8-bytes`（fanin 6）が最多 → 多用されるユーティリティ。
+
 ---
 
 ## 4. 呼び出し木を表示する
@@ -161,6 +196,27 @@ workbench.core/ingest!
 名前空間を絞り込んでから木を承ることもできる：
 
 ```clojure
+(core/call-tree (core/refs) "workbench.jref/jref!")
+```
+
+```
+workbench.jref/jref!
+  workbench.jref/java-files
+  workbench.jref/parse-file
+    workbench.jref/call->doc
+      workbench.jref/from-sym
+        workbench.jref/find-ancestor
+        workbench.jref/find-ancestor [...]
+      workbench.jref/opt->val
+      workbench.jref/opt->val [...]
+```
+
+> **`[...]` の意味**: 同じノードが既に展開済みの場合、再展開せず `[...]` で示す。  
+> DAG（複数経路から同じノードに到達）でも循環参照でも同様に抑制される。
+
+`core/refs` に名前空間フィルタを組み合わせると範囲を絞れる：
+
+```clojure
 (core/call-tree (core/refs "workbench.core") "workbench.core/tree")
 ```
 
@@ -173,10 +229,8 @@ workbench.core/tree
   workbench.visualize/tree
     workbench.visualize/build-tree
     workbench.visualize/render-tree
-      workbench.visualize/render-tree
+      workbench.visualize/render-tree [...]
 ```
-
-> **ヒント**: `render-tree` の自己参照（再帰）は `visited` で橉 1 段で止まる。
 
 ---
 
