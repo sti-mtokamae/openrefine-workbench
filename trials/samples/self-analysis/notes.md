@@ -129,6 +129,69 @@ workbench.jref/jref!
 
 ## 発見と次のアクション
 
-- **Clojure 側 `group-by` パターン**が XTDB `aggregate` より柔軟で使いやすい。`docs/analysis.md` に追記候補
-- `normalize-trial`（fanout 18）を `call-tree` で展開するとアーキテクチャの全体像が見えそう
-- `find-ancestor` / `opt->val` が複数回表示される問題 → `call-tree` の重複表示を抑制する余地あり
+- **Clojure 側 `group-by` パターン**が XTDB `aggregate` より柔軟で使いやすい。`docs/analysis.md` に追記候補 → ✅ 追記済み
+- `normalize-trial`（fanout 18）を `call-tree` で展開するとアーキテクチャの全体像が見えそう → ✅ 下記参照
+- `find-ancestor` / `opt->val` が複数回表示される問題 → `call-tree` の重複表示を抑制する余地あり → ✅ `[...]` で対処済み
+
+## openrefine-runner アーキテクチャ（call-tree で読む）
+
+### normalize-trial（fanout 18 の正体）
+
+```
+openrefine-runner/normalize-trial
+  openrefine-runner/read-trial          ← trial.edn 読み込み
+  openrefine-runner/trial-dir           ← メタデータ取得 (×6)
+  openrefine-runner/trial-id
+  openrefine-runner/trial-tool
+  openrefine-runner/project-name
+  openrefine-runner/goal
+  openrefine-runner/notes-file
+  openrefine-runner/input-files         ← ファイルリスト取得
+  openrefine-runner/seed-files
+  openrefine-runner/output-dir          ← 出力設定取得
+  openrefine-runner/export-format
+  openrefine-runner/import-format
+  openrefine-runner/open-browser?
+  openrefine-runner/openrefine-url
+  openrefine-runner/resolve-path        ← パス解決（4回）
+  openrefine-runner/resolve-path [...]
+  openrefine-runner/resolve-path [...]
+  openrefine-runner/resolve-path [...]
+```
+
+**読み**: fanout 18 は「複雑な処理」ではなく「フィールドアクセサを 18 個呼ぶ設計」。  
+`normalize-trial` の責務は純粋な trial.edn 正規化。`resolve-path` が4回 `[...]` になるのは、複数パスに同じユーティリティを繰り返すため。
+
+### run-trial の全体フロー
+
+```
+openrefine-runner/run-trial
+  openrefine-runner/normalize-trial     ← trial.edn 正規化（上記）
+    ...
+  openrefine-runner/validate-trial!     ← 入力ファイル存在確認
+    openrefine-runner/ensure-file-exists!
+    openrefine-runner/ensure-file-exists! [...]
+  openrefine-runner/reachable?          ← OpenRefine 起動確認
+    openrefine-runner/http-get-text
+  openrefine-runner/create-project!     ← プロジェクト作成（multipart POST）
+    openrefine-runner/http-client
+    openrefine-runner/multipart-body
+      openrefine-runner/utf8-bytes      ← バイト変換ユーティリティ（×6）
+      ...
+    openrefine-runner/random-boundary
+  openrefine-runner/apply-operations!  ← seed-history 適用
+  openrefine-runner/fetch-csrf-token    ← CSRF トークン取得
+    openrefine-runner/extract-csrf-token
+    openrefine-runner/http-get-text [...]
+  openrefine-runner/export-results!    ← TSV/CSV エクスポート
+    openrefine-runner/fetch-csrf-token [...]
+    openrefine-runner/format-to-openrefine-format
+    openrefine-runner/http-client [...]
+  openrefine-runner/open-browser!      ← ブラウザ起動（オプション）
+    openrefine-runner/debug
+      openrefine-runner/*debug*
+  openrefine-runner/format-to-file-extension
+```
+
+**読み**: `run-trial` は 9 ステップのオーケストレーター。  
+HTTP ユーティリティ（`http-client` / `http-get-text` / `utf8-bytes`）が各ステップで共有されており、ファンイン集計で `utf8-bytes` が最多（6）になる理由がここで明確になる。
