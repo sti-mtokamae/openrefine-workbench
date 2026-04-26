@@ -85,6 +85,23 @@
   [query]
   (query/q (node) query))
 
+(defn refs
+  "プロジェクト内部の呼び出しグラフを返す。
+   clojure.core / java.* / xtdb.* 等の標準ライブラリ呼び出しと
+   <top-level> 宣言ノイズを除外済み。
+
+   例:
+     (refs)
+     (refs \"workbench.core\")"
+  ([]
+   (->> (q '(from :refs [{:ref/from from :ref/to to :ref/file file :ref/line line}]
+                  (order-by from to)))
+        (remove #(re-find #"^(clojure\.|java\.|xtdb\.)" (:to %)))
+        (remove #(re-find #"/<top-level>$" (:from %)))))
+  ([ns-prefix]
+   (->> (refs)
+        (filter #(clojure.string/starts-with? (:from %) ns-prefix)))))
+
 ;; -------------------------
 ;; visualize
 ;; -------------------------
