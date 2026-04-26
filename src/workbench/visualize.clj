@@ -48,20 +48,24 @@
 ;; call-tree
 ;; -------------------------
 
-(defn- render-call-tree [by-from node depth visited]
-  (println (str (apply str (repeat depth "  ")) node))
-  (when-not (visited node)
-    (doseq [{:keys [to]} (sort-by :to (get by-from node))]
-      (render-call-tree by-from to (inc depth) (conj visited node)))))
+(defn- render-call-tree [by-from node depth expanded]
+  (let [indent (apply str (repeat depth "  "))
+        seen?  (@expanded node)]
+    (println (str indent node (when seen? " [...]")))
+    (when-not seen?
+      (swap! expanded conj node)
+      (doseq [{:keys [to]} (sort-by :to (get by-from node))]
+        (render-call-tree by-from to (inc depth) expanded)))))
 
 (defn call-tree
   "refs（[{:from from :to to}] のシーケンス）から root を起点に
-   呼び出し木をテキスト表示する（stdout）。循環参照は 1 段で止める。
+   呼び出し木をテキスト表示する（stdout）。
+   既展開ノードは [...] で示し、再展開しない（DAG 重複・循環参照どちらも抑制）。
 
    例:
      (visualize/call-tree (core/refs) \"workbench.core/ingest!\")"
   [refs root]
-  (render-call-tree (group-by :from refs) root 0 #{}))
+  (render-call-tree (group-by :from refs) root 0 (atom #{})))
 
 (defn call-tree-str
   "call-tree と同じだが文字列として返す（REPL / AI 向け）。
