@@ -14,6 +14,7 @@
 
 (require '[workbench.ingest :as ingest])
 (require '[workbench.jref   :as jref])
+(require '[workbench.core   :as core])
 (require '[workbench.visualize :as visualize])
 
 ;; --------------- helpers ---------------
@@ -113,4 +114,52 @@
       (jref/jref! node [root] :trial "smoke-java")
       (assert= "再投入後も件数が同じ（冪等性）" n (count-by-trial node "smoke-java")))
 
-    (println "\n=== all smoke tests passed ===")))
+    (println "\n=== all smoke tests passed ==="))
+
+  ;; ── core/ 経由のテスト（start!/stop! のライフサイクル込み） ──────
+  (println "\n=== core/start! (persist? false) ===")
+  (core/start! {:persist? false})
+
+  ;; core/xref! が :trial を中継できているか
+  (println "\n=== core/xref! :trial core-trial ===")
+  (let [n (core/xref! ["src"] :trial "core-trial")]
+    (assert-pos "core/xref! refs (raw)" n)
+    (let [rows (core/q '(from :refs [{:xt/id id :ref/trial t}]))
+          trial-rows (filter #(= "core-trial" (:t %)) rows)]
+      (assert-pos "core-trial 件数" (count trial-rows))
+      (assert= ":xt/id prefix (core)" true
+               (every? #(str/starts-with? (:id %) "core-trial::") trial-rows))))
+
+  ;; core/jref! が :trial を中継できているか
+  (println "\n=== core/jref! :trial core-java ===")
+  (let [root (or (first *command-line-args*) "trials/samples/repo")
+        n (core/jref! [root] :trial "core-java")]
+    (assert-pos "core/jref! refs (raw)" n)
+    (let [rows (core/q '(from :refs [{:xt/id id :ref/trial t}]))
+          trial-rows (filter #(= "core-java" (:t %)) rows)]
+      (assert= "core-java 件数" n (count trial-rows))))
+
+  ;; core/refs のノイズフィルタ確認
+  (println "\n=== core/refs noise filter ===")
+  (let [all-refs (core/refs)]
+    (assert-pos "core/refs 件数" (count all-refs))
+    (assert= "clojure.* が除外されている" true
+             (every? #(not (str/starts-with? (:to %) "clojure.")) all-refs))
+    (assert= "<top-level> が除外されている" true
+             (every? #(not (str/ends-with? (:from %) "/<top-level>")) all-refs)))
+
+  ;; core/refs ns-prefix フィルタ確認
+  (println "\n=== core/refs ns-prefix filter ===")
+  (let [filtered (core/refs "workbench.core")]
+    (assert-pos "workbench.core refs 件数" (count filtered))
+    (assert= "workbench.core のみ" true
+             (every? #(str/starts-with? (:from %) "workbench.core") filtered)))
+
+  ;; core/call-tree-str の基本動作
+  (println "\n=== core/call-tree-str ===")
+  (let [all-refs (core/refs)
+        s (core/call-tree-str all-refs "workbench.core/ingest!")]
+    (assert= "call-tree-str が文字列" true (string? s)))
+
+  (core/stop!)
+  (println "\n=== all core/ tests passed ==="))
