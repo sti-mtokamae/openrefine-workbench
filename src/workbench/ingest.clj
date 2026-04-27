@@ -3,6 +3,7 @@
    Human REPL と AI Agent が同じ呼び出し面を使う。"
   (:require
    [clojure.java.io :as io]
+   [clojure.set :as set]
    [clojure.string :as str]
    [clj-xref.core :as xref]
    [xtdb.api :as xt]))
@@ -69,29 +70,39 @@
 ;; clj-xref (Clojure cross-reference)
 ;; -------------------------
 
-(defn- ref->doc [{:keys [kind from to file line col arity] :as _ref}]
-  {:xt/id        (str from "->" to "@" file ":" line)
-   :ref/kind     (str kind)
-   :ref/from     (str from)
-   :ref/to       (str to)
-   :ref/file     (str file)
-   :ref/line     line
-   :ref/col      col
-   :ref/arity    arity})
+(defn- ref->doc [{:keys [kind from to file line col arity] :as _ref} trial]
+  (let [id-prefix (if trial (str trial "::") "")]
+    {:xt/id        (str id-prefix from "->" to)
+     :ref/trial    trial
+     :ref/kind     (str kind)
+     :ref/from     (str from)
+     :ref/to       (str to)
+     :ref/file     (str file)
+     :ref/line     line
+     :ref/col      col
+     :ref/arity    arity}))
 
 (defn xref!
   "Clojure ソースの cross-reference 解析結果を XTDB :refs テーブルに put する。
    clj-xref (clj-kondo ベース) を使う。
 
    paths: 解析対象パスのベクタ（例: [\"src\" \"test\"]）
+   opts:
+     :trial - トライアル識別子（文字列）。省略可。
 
    例:
      (ingest/xref! node [\"src\"])
-     (ingest/xref! node [\"src\" \"test\"])"
-  [node paths]
-  (let [db   (xref/analyze paths)
-        refs (get db :refs [])
-        txs  (mapv (fn [r] [:put-docs :refs (ref->doc r)]) refs)]
-    (when (seq txs)
-      (xt/execute-tx node txs))
-    (count txs)))
+     (ingest/xref! node [\"src\"] :trial \"my-trial\")"
+  [node paths & {:keys [trial]}]
+  (let [db      (xref/analyze paths)
+        refs    (get db :refs [])
+        new-ids (set (map #(:xt/id (ref->doc % trial)) refs))
+        old-ids (->> (xt/q node '(from :refs [{:xt/id id :ref/trial t}]))
+                     (filter #(= (:t %) trial))
+                     (map :id)
+                     set)
+        del-txs (mapv (fn [id] [:delete-docs :refs id]) (set/difference old-ids new-ids))
+        put-txs (mapv (fn [r] [:put-docs :refs (ref->doc r trial)]) refs)]
+    (when (seq del-txs) (xt/execute-tx node del-txs))
+    (when (seq put-txs) (xt/execute-tx node put-txs))
+    (count put-txs)))

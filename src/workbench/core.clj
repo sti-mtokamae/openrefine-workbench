@@ -10,6 +10,7 @@
      (q '(from :files [*]))
      (stop!)"
   (:require
+   [clojure.string      :as str]
    [workbench.ingest    :as ingest]
    [workbench.jref      :as jref]
    [workbench.query     :as query]
@@ -26,16 +27,15 @@
   "XTDB ノードを起動する。すでに起動済みなら何もしない。
 
    オプション:
-     :persist? - true でローカルディレクトリに永続化（デフォルト false = インメモリ）
+     :persist? - true でローカルディレクトリに永続化（デフォルト true）
      :db-path  - 永続化先ディレクトリ（デフォルト \".xtdb\"）
 
    例:
-     (start!)                          ; インメモリ
-     (start! {:persist? true})         ; .xtdb/ に永続化
-     (start! {:persist? true
-               :db-path  \".xtdb-dev\"}) ; 任意のパスに永続化"
+     (start!)                          ; .xtdb/ に永続化
+     (start! {:persist? false})        ; インメモリ（一時利用）
+     (start! {:db-path \".xtdb-dev\"})   ; 任意のパスに永続化"
   ([] (start! {}))
-  ([{:keys [persist? db-path] :or {persist? false db-path ".xtdb"}}]
+  ([{:keys [persist? db-path] :or {persist? true db-path ".xtdb"}}]
    (when-not @state
      (reset! state
        (xtn/start-node
@@ -72,22 +72,29 @@
 
 (defn xref!
   "Clojure ソースを cross-reference 解析して XTDB :refs テーブルに取り込む。
+   投入済みの refs と差分を取って削除＋追加を行う（同期）。
+
+   opts:
+     :trial - トライアル識別子（素持ち同期のスコープ）
 
    例:
      (xref! [\"src\"])
-     (xref! [\"src\" \"test\"])"
-  [paths]
-  (ingest/xref! (node) paths))
+     (xref! [\"src\"] :trial \"aca-spring\")"
+  [paths & {:keys [trial]}]
+  (ingest/xref! (node) paths :trial trial))
 
 (defn jref!
   "Java ソースを cross-reference 解析して XTDB :refs テーブルに取り込む。
-   JavaParser (静的解析) を使う。
+   投入済みの refs と差分を取って削除＋追加を行う（同期）。
+
+   opts:
+     :trial - トライアル識別子（素持ち同期のスコープ）
 
    例:
      (jref! [\"trials/samples/repo\"])
-     (jref! [\"src/main/java\"])"
-  [paths]
-  (jref/jref! (node) paths))
+     (jref! [\"src/main/java\"] :trial \"aca-spring\")"
+  [paths & {:keys [trial]}]
+  (jref/jref! (node) paths :trial trial))
 ;; -------------------------
 ;; query
 ;; -------------------------
@@ -116,7 +123,7 @@
         (remove #(re-find #"/<top-level>$" (:from %)))))
   ([ns-prefix]
    (->> (refs)
-        (filter #(clojure.string/starts-with? (:from %) ns-prefix)))))
+        (filter #(str/starts-with? (:from %) ns-prefix)))))
 
 ;; -------------------------
 ;; visualize

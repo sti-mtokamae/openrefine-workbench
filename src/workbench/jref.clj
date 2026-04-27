@@ -3,6 +3,7 @@
    解析は静的 AST レベル（シンボルリゾルバなし）。メソッド呼び出しを抽出する。"
   (:require
    [clojure.java.io :as io]
+   [clojure.set     :as set]
    [xtdb.api        :as xt])
   (:import
    [com.github.javaparser StaticJavaParser]
@@ -40,15 +41,17 @@
 
 (defn- call->doc
   "MethodCallExpr 1 件を :refs ドキュメントに変換する。"
-  [^MethodCallExpr expr rel-path]
+  [^MethodCallExpr expr rel-path trial]
   (let [from  (from-sym expr)
         scope (some-> (.getScope expr) opt->val str)
         mname (.getNameAsString expr)
         to    (if scope (str scope "." mname) mname)
         pos   (opt->val (.getBegin expr))
         line  (some-> pos .-line)
-        col   (some-> pos .-column)]
-    {:xt/id     (str from "->" to "@" rel-path ":" line)
+        col   (some-> pos .-column)
+        id-prefix (if trial (str trial "::") "")]
+    {:xt/id     (str id-prefix from "->" to)
+     :ref/trial trial
      :ref/kind  ":call"
      :ref/from  from
      :ref/to    to
@@ -71,13 +74,13 @@
 (defn- parse-file
   "1 つの .java ファイルを解析し、call-doc のシーケンスを返す。
    パースエラーは警告を出してスキップする。"
-  [root ^java.io.File f]
+  [root ^java.io.File f trial]
   (let [abs      (.getAbsolutePath f)
         root-abs (.getAbsolutePath (io/file root))
         rel      (subs abs (inc (count root-abs)))]
     (try
       (let [cu (.findAll (StaticJavaParser/parse f) MethodCallExpr)]
-        (map #(call->doc % rel) cu))
+        (map #(call->doc % rel trial) cu))
       (catch Exception e
         (binding [*out* *err*]
           (println (str "[jref] parse error: " rel " — " (.getMessage e))))
@@ -93,16 +96,24 @@
    単純名 (例: \"System.out.println\") になる。
 
    paths: 解析対象パスのベクタ（例: [\"trials/samples/repo\"]）
+   opts:
+     :trial - トライアル識別子（文字列）。省略可。
 
    例:
      (jref! node [\"trials/samples/repo\"])
-     (jref! node [\"src/main/java\"])"
-  [node paths]
-  (let [docs (->> paths
-                  (mapcat (fn [root]
-                            (mapcat #(parse-file root %) (java-files root))))
-                  vec)
-        txs  (mapv #(vector :put-docs :refs %) docs)]
-    (when (seq txs)
-      (xt/execute-tx node txs))
-    (count txs)))
+     (jref! node [\"src/main/java\"] :trial \"aca-spring\")"
+  [node paths & {:keys [trial]}]
+  (let [docs    (->> paths
+                     (mapcat (fn [root]
+                               (mapcat #(parse-file root % trial) (java-files root))))
+                     vec)
+        new-ids (set (map :xt/id docs))
+        old-ids (->> (xt/q node '(from :refs [{:xt/id id :ref/trial t}]))
+                     (filter #(= (:t %) trial))
+                     (map :id)
+                     set)
+        del-txs (mapv (fn [id] [:delete-docs :refs id]) (set/difference old-ids new-ids))
+        put-txs (mapv #(vector :put-docs :refs %) docs)]
+    (when (seq del-txs) (xt/execute-tx node del-txs))
+    (when (seq put-txs) (xt/execute-tx node put-txs))
+    (count put-txs)))
