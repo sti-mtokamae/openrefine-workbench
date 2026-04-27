@@ -160,6 +160,30 @@
   (let [all-refs (core/refs)
         s (core/call-tree-str all-refs "workbench.core/ingest!")]
     (assert= "call-tree-str が文字列" true (string? s)))
+  ;; core/fan-out
+  (println "\n=== core/fan-out ===")
+  (let [rs  (core/refs)
+        fos (core/fan-out rs)]
+    (assert-pos "fan-out 結果件数" (count fos))
+    (assert= ":symbol キーあり" true (every? #(contains? % :symbol) fos))
+    (assert= ":count キーあり"  true (every? #(contains? % :count)  fos))
+    (assert= "降順に並んでいる" true
+             (apply >= (map :count fos))))
 
+  ;; core/fan-in
+  (println "\n=== core/fan-in ===")
+  (let [rs  (core/refs)
+        fis (core/fan-in rs)]
+    (assert-pos "fan-in 結果件数" (count fis))
+    (assert= ":symbol キーあり" true (every? #(contains? % :symbol) fis))
+    (assert= ":count キーあり"  true (every? #(contains? % :count)  fis))
+    (assert= "降順に並んでいる" true
+             (apply >= (map :count fis))))
+
+  ;; core/hotspots
+  (println "\n=== core/hotspots ===")
+  (let [hs (core/hotspots 3)]
+    (assert= "hotspots 件数 ≤ 3" true (<= (count hs) 3))
+    (assert= ":symbol キーあり" true (every? #(contains? % :symbol) hs)))
   (core/stop!)
   (println "\n=== all core/ tests passed ==="))

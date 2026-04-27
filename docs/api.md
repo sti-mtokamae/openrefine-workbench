@@ -21,6 +21,12 @@ REPL / AI Agent 向けの統合エントリポイント。
 | `(core/refs ns-prefix)` | `ns-prefix` で始まる名前空間の呼び出しグラフのみ |
 | `(core/call-tree refs root)` | `root` を起点に呼び出し木をテキスト表示（stdout） |
 | `(core/call-tree-str refs root)` | `call-tree` の文字列版（AI Agent / テスト向け） |
+| `(core/fan-out)` | 全シンボルの fan-out（依存数）を降順で返す |
+| `(core/fan-out refs)` | refs を指定して fan-out を計算 |
+| `(core/fan-in)` | 全シンボルの fan-in（被依存数）を降順で返す |
+| `(core/fan-in refs)` | refs を指定して fan-in を計算 |
+| `(core/hotspots)` | fan-in 上位 10 シンボルを返す |
+| `(core/hotspots n)` | fan-in 上位 n シンボルを返す |
 
 ### 使用例
 
@@ -56,6 +62,13 @@ REPL / AI Agent 向けの統合エントリポイント。
 ;; 呼び出し木を表示
 (core/call-tree (core/refs) "workbench.core/ingest!")   ; stdout に木表示
 (core/call-tree-str (core/refs) "workbench.core/tree")  ; 文字列として取得
+
+;; メトリクス（fan-in / fan-out）
+(core/fan-out)                     ; 依存数降順。高いほど変更影響が広い
+(core/fan-out (core/refs "workbench.core")) ; refs を絞り込んで計算
+(core/fan-in)                      ; 被依存数降順。高いほど重要
+(core/hotspots)                    ; fan-in 上位 10 シンボル（デフォルト）
+(core/hotspots 5)                  ; 上位 5 シンボル
 
 ;; ツリー表示
 (core/tree)

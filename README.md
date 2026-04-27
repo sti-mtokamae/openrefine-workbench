@@ -47,6 +47,7 @@ ingest → query → visualize
 ```
 .
 ├── bin/
+│   ├── analyze                # コード解析ショートカット（1コマンド完結）
 │   ├── init-trial             # trial.edn スケルトン生成
 │   ├── run-trial              # OpenRefine trial 実行
 │   └── start-openrefine.ps1   # Windows 用 OpenRefine 起動スクリプト
@@ -93,7 +94,23 @@ guix shell -m manifest.scm -- clojure -A:xtdb:repl
 (core/jref!   ["trials/samples/repo"]) ; => 1（Java xref）
 (core/tree)
 (core/q '(from :refs [*] (limit 3)))
+
+;; メトリクス
+(core/fan-out)                     ; 依存数降順
+(core/fan-in)                      ; 被依存数降順
+(core/hotspots)                    ; fan-in 上位 10
+(core/hotspots 5)                  ; 上位 5
 (core/stop!)
+```
+
+**`bin/analyze` — 1 コマンド完結**
+
+```bash
+# Clojure + Java 両方を解析（デフォルト）
+bin/analyze src/
+
+# trial スコープ付き・Java のみ・hotspots 上位 5
+bin/analyze trials/samples/repo --trial my-trial --lang java --top 5
 ```
 
 smoke test:
@@ -141,6 +158,8 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `tree` / `tree-str` — ツリー表示 | ✅ |
 | `refs` — 内部呼び出しグラフ（ノイズフィルタ付き） | ✅ |
 | `call-tree` / `call-tree-str` — 呼び出し木表示 | ✅ |
+| `fan-out` / `fan-in` / `hotspots` — 依存メトリクス | ✅ |
+| `bin/analyze` — 解析ショートカット CLI | ✅ |
 
 ### OpenRefine trial ワークフロー
 

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# analyze — コード解析ショートカット
+#
+# 使い方:
+#   bin/analyze <root> [--trial TRIAL] [--top N] [--lang clj|java|both]
+#
+# 例:
+#   bin/analyze src/
+#   bin/analyze trials/samples/repo --trial aca-spring --lang java
+#   bin/analyze src/ --top 5
+
+set -euo pipefail
+
+ROOT=""
+TRIAL=""
+TOP=10
+LANG="both"
+
+# 引数パース
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --trial) TRIAL="$2"; shift 2 ;;
+    --top)   TOP="$2";   shift 2 ;;
+    --lang)  LANG="$2";  shift 2 ;;
+    -*)      echo "Unknown option: $1" >&2; exit 1 ;;
+    *)       ROOT="$1";  shift ;;
+  esac
+done
+
+if [[ -z "$ROOT" ]]; then
+  echo "Usage: bin/analyze <root> [--trial TRIAL] [--top N] [--lang clj|java|both]" >&2
+  exit 1
+fi
+
+# Clojure の評価式を組み立てる
+TRIAL_ARG=""
+if [[ -n "$TRIAL" ]]; then
+  TRIAL_ARG=":trial \"${TRIAL}\""
+fi
+
+EXPR="
+(require '[workbench.core :as core])
+(core/start!)
+(core/ingest! \"${ROOT}\")
+$(if [[ "$LANG" == "clj" || "$LANG" == "both" ]]; then
+  echo "(println \"--- xref (Clojure) ---\") (println (core/xref! [\"${ROOT}\"] ${TRIAL_ARG}))"
+fi)
+$(if [[ "$LANG" == "java" || "$LANG" == "both" ]]; then
+  echo "(println \"--- jref (Java) ---\") (println (core/jref! [\"${ROOT}\"] ${TRIAL_ARG}))"
+fi)
+(println \"--- file tree ---\")
+(core/tree)
+(println \"--- hotspots (top ${TOP}) ---\")
+(doseq [h (core/hotspots ${TOP})] (println (format \"  %3d  %s\" (:count h) (:symbol h))))
+(core/stop!)
+"
+
+exec guix shell -m manifest.scm -- \
+  clojure -A:xtdb -M -e "$EXPR"

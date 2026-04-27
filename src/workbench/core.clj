@@ -153,3 +153,47 @@
   "call-tree と同じだが文字列として返す（AI Agent / テスト向け）。"
   [refs root]
   (visualize/call-tree-str refs root))
+
+;; -------------------------
+;; metrics
+;; -------------------------
+
+(defn fan-out
+  "各シンボルが呼び出している関数の数（依存数）を降順で返す。
+   高 fan-out = 多くの関数に依存している（= 変更影響が広い）。
+
+   例:
+     (fan-out)
+     (fan-out (refs \"workbench.core\"))"
+  ([] (fan-out (refs)))
+  ([rs]
+   (->> rs
+        (group-by :from)
+        (map (fn [[sym cs]]
+               {:symbol sym :count (count (distinct (map :to cs)))}))
+        (sort-by :count >))))
+
+(defn fan-in
+  "各シンボルへの呼び出し元数（被依存数）を降順で返す。
+   高 fan-in = 多くの箇所から呼ばれている（= 重要・変更コスト高）。
+
+   例:
+     (fan-in)
+     (fan-in (refs \"workbench\"))"
+  ([] (fan-in (refs)))
+  ([rs]
+   (->> rs
+        (group-by :to)
+        (map (fn [[sym cs]]
+               {:symbol sym :count (count (distinct (map :from cs)))}))
+        (sort-by :count >))))
+
+(defn hotspots
+  "fan-in が高い上位 n シンボルを返す（デフォルト n=10）。
+   DB に蓄積した refs 全体が対象。
+
+   例:
+     (hotspots)
+     (hotspots 5)"
+  ([] (hotspots 10))
+  ([n] (take n (fan-in))))
