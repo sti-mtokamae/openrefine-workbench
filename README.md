@@ -30,9 +30,10 @@ ingest → query → visualize
 ```clojure
 (require '[workbench.core :as core])
 
-(core/start!)
+(core/start!)                          ; デフォルト: .xtdb/ に永続化
 (core/ingest! "src")                   ; ファイルツリー → :files テーブル
 (core/xref!   ["src"])                 ; Clojure xref  → :refs テーブル
+(core/xref!   ["src"] :trial "t1")    ; trial スコープ付きで同期
 (core/jref!   ["trials/samples/repo"]) ; Java xref     → :refs テーブル
 (core/tree)                            ; ツリー表示
 (core/q '(from :refs [*]))             ; 任意クエリ
@@ -85,9 +86,10 @@ guix shell -m manifest.scm -- clojure -A:xtdb:repl
 ```clojure
 (require '[workbench.core :as core])
 
-(core/start!)
+(core/start!)                          ; デフォルト: .xtdb/ に永続化
 (core/ingest! "src")                   ; => 5
 (core/xref!   ["src"])                 ; => 500（Clojure xref）
+(core/xref!   ["src"] :trial "t1")    ; trial スコープ付きで同期
 (core/jref!   ["trials/samples/repo"]) ; => 1（Java xref）
 (core/tree)
 (core/q '(from :refs [*] (limit 3)))
