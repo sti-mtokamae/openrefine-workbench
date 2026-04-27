@@ -6,6 +6,9 @@ target/
 build/
 dist/
 
+# XTDB local persistence
+.xtdb*/
+
 # External tools
 bin/orcli
 

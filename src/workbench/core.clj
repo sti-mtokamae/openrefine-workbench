@@ -23,11 +23,27 @@
 (defonce ^:private state (atom nil))
 
 (defn start!
-  "XTDB ノードを起動する。すでに起動済みなら何もしない。"
-  []
-  (when-not @state
-    (reset! state (xtn/start-node {})))
-  :started)
+  "XTDB ノードを起動する。すでに起動済みなら何もしない。
+
+   オプション:
+     :persist? - true でローカルディレクトリに永続化（デフォルト false = インメモリ）
+     :db-path  - 永続化先ディレクトリ（デフォルト \".xtdb\"）
+
+   例:
+     (start!)                          ; インメモリ
+     (start! {:persist? true})         ; .xtdb/ に永続化
+     (start! {:persist? true
+               :db-path  \".xtdb-dev\"}) ; 任意のパスに永続化"
+  ([] (start! {}))
+  ([{:keys [persist? db-path] :or {persist? false db-path ".xtdb"}}]
+   (when-not @state
+     (reset! state
+       (xtn/start-node
+         (if persist?
+           {:log         [:local {:path (str db-path "/log")}]
+            :index-store [:local {:path (str db-path "/index-store")}]}
+           {}))))
+   :started))
 
 (defn stop!
   "XTDB ノードを停止する。"
