@@ -7,11 +7,13 @@ REPL / AI Agent 向けの統合エントリポイント。
 
 | 関数 | 説明 |
 |---|---|
-| `(core/start!)` | XTDB ノードを起動（インメモリ） |
+| `(core/start!)` | XTDB ノードを起動（デフォルト: `.xtdb/` に永続化） |
 | `(core/stop!)` | ノードを停止 |
 | `(core/ingest! root)` | ディレクトリ以下を `:files` テーブルへ |
-| `(core/xref! paths)` | Clojure ソースを解析して `:refs` テーブルへ |
-| `(core/jref! paths)` | Java ソースを解析して `:refs` テーブルへ |
+| `(core/xref! paths)` | Clojure ソースを解析して `:refs` テーブルへ（差分同期） |
+| `(core/xref! paths :trial t)` | trial スコープ付きで Clojure xref を同期 |
+| `(core/jref! paths)` | Java ソースを解析して `:refs` テーブルへ（差分同期） |
+| `(core/jref! paths :trial t)` | trial スコープ付きで Java xref を同期 |
 | `(core/q xtql)` | XTQL / SQL クエリを実行 |
 | `(core/tree)` | `:files` テーブルをツリー表示（stdout） |
 | `(core/tree-str)` | `tree` の文字列版（AI Agent / テスト向け） |
@@ -25,16 +27,23 @@ REPL / AI Agent 向けの統合エントリポイント。
 ```clojure
 (require '[workbench.core :as core])
 
+;; デフォルトは .xtdb/ に永続化
 (core/start!)
+;; インメモリで起動する場合
+;; (core/start! {:persist? false})
 
 ;; ファイルツリーを取り込む
 (core/ingest! "src")               ; => 5
 
-;; Clojure xref を取り込む
+;; Clojure xref を取り込む（trial なし）
 (core/xref! ["src"])               ; => 500
+;; trial スコープ付き（差分同期）
+(core/xref! ["src"] :trial "my-trial") ; => 500
 
-;; Java xref を取り込む
-(core/jref! ["trials/samples/repo"]) ; => 1
+;; Java xref を取り込む（trial なし）
+(core/jref! ["trials/samples/repo"]) ; => 12
+;; trial スコープ付き（差分同期）
+(core/jref! ["trials/samples/repo"] :trial "my-trial") ; => 12
 
 ;; クエリ
 (core/q '(from :files [*] (limit 1)))
@@ -74,7 +83,8 @@ REPL / AI Agent 向けの統合エントリポイント。
 
 | フィールド | 型 | 説明 |
 |---|---|---|
-| `:xt/id` | string | `from->to@file:line`（主キー） |
+| `:xt/id` | string | `"trial::from->to"` または `"from->to"`（主キー） |
+| `:ref/trial` | string \| nil | trial 識別子（`nil` = trial なし） |
 | `:ref/from` | string | 呼び出し元（`ClassName/method` 形式） |
 | `:ref/to` | string | 呼び出し先 |
 | `:ref/kind` | string | `:call` / `:reference` / `:macroexpand` など |
@@ -82,6 +92,16 @@ REPL / AI Agent 向けの統合エントリポイント。
 | `:ref/line` | int | 行番号 |
 | `:ref/col` | int | 列番号 |
 | `:ref/arity` | int | 引数の数 |
+
+**`:xt/id` の形式：**
+
+| 呼び出し方 | `:xt/id` 例 |
+|---|---|
+| `(xref! ["src"])` | `"workbench.core/start!->xtdb.node/start-node"` |
+| `(xref! ["src"] :trial "t1")` | `"t1::workbench.core/start!->xtdb.node/start-node"` |
+
+trial スコープの同期は `:ref/trial` 値が一致する既存 refs を差分削除してから新 refs を投入する。
+trial なし（`nil`）も同様に nil スコープとして同期対象になる。
 
 **`xref!` vs `jref!` の違い：**
 
