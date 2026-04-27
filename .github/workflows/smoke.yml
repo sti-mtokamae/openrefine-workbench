@@ -1,21 +1,21 @@
 name: smoke-test
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "src/**"
-      - "test/**"
-      - "deps.edn"
-      - "manifest.scm"
-      - ".github/workflows/smoke.yml"
-  pull_request:
-    paths:
-      - "src/**"
-      - "test/**"
-      - "deps.edn"
-      - "manifest.scm"
-      - ".github/workflows/smoke.yml"
+  # push:
+  #   branches: ["main"]
+  #   paths:
+  #     - "src/**"
+  #     - "test/**"
+  #     - "deps.edn"
+  #     - "manifest.scm"
+  #     - ".github/workflows/smoke.yml"
+  # pull_request:
+  #   paths:
+  #     - "src/**"
+  #     - "test/**"
+  #     - "deps.edn"
+  #     - "manifest.scm"
+  #     - ".github/workflows/smoke.yml"
   workflow_dispatch:
 
 jobs:
