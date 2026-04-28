@@ -131,22 +131,87 @@
    prefix で始まるクラス呼び出しのみ残す。
 
    opts:
-     :trial  - トライアル識別子でフィルタ（文字列）
-     :prefix - 残す :ref/from の先頭文字列（デフォルト nil = 全件）
+     :trial        - トライアル識別子でフィルタ（文字列）
+     :prefix       - 残す :ref/from の先頭文字列（デフォルト nil = 全件）
+     :exclude-test - true のとき *Test / *Tests クラスを除外する
 
    例:
      (jrefs :trial \"tradehub\")
+     (jrefs :trial \"tradehub\" :exclude-test true)
      (jrefs :trial \"tradehub\" :prefix \"AclService\")"
-  [& {:keys [trial prefix]}]
+  [& {:keys [trial prefix exclude-test]}]
   (let [noise #"^(when|verify|any|eq|times|never|mock|spy|doReturn|doThrow|assert|assertEquals|assertThat|assertNotNull|assertNull|assertTrue|assertFalse|given|then|willReturn|Arrays\.|Collections\.|List\.|Map\.|Optional\.|String\.|Objects\.|UUID\.|Math\.|System\.|log\.|super\.|this\.|result\.)"
-        rs    (->> (q '(from :refs [{:ref/from from :ref/to to :ref/trial t :ref/file file :ref/line line}]
+        rs*   (->> (q '(from :refs [{:ref/from from :ref/to to :ref/trial t :ref/file file :ref/line line}]
                               (order-by from to)))
                    (filter #(or (nil? trial) (= trial (:t %))))
                    (remove #(re-find noise (:to %)))
-                   (remove #(= "<top-level>" (:from %))))]
+                   (remove #(= "<top-level>" (:from %))))
+        rs    (if exclude-test
+                (remove #(re-find #"(Test|Tests)/" (:from %)) rs*)
+                rs*)]
     (if prefix
       (filter #(str/starts-with? (:from %) prefix) rs)
       rs)))
+
+(defn topo-sort
+  "クラスレベルの依存グラフをトポロジカルソートし、
+   「先に切り出せる順（葉から根へ）」のクラス名ベクタを返す。
+
+   スコープ付きメソッド呼び出し（Foo.bar() / foo.bar()）から
+   クラス間依存を推定する。シンボルリゾルバなしのため推定精度は限定的。
+   循環依存があるクラスは末尾に追記される。
+
+   opts:
+     :rs - refs（デフォルト: (jrefs :exclude-test true)）
+
+   例:
+     (topo-sort)
+     (topo-sort :rs (jrefs :trial \"tradehub\" :exclude-test true))"
+  [& {:keys [rs]}]
+  (let [rs        (or rs (jrefs :exclude-test true))
+        ;; :ref/from のクラス名セット
+        known     (->> rs (map :from)
+                       (map #(first (str/split % #"/")))
+                       set)
+        ;; scope → 既知クラス名。大文字始まり=静的呼び出し、小文字始まり=先頭大文字化して照合
+        scope->cls (fn [to]
+                     (when (str/includes? to ".")
+                       (let [scope (first (str/split to #"\."))
+                             cap   (if (Character/isUpperCase (.charAt scope 0))
+                                     scope
+                                     (str (Character/toUpperCase (.charAt scope 0))
+                                          (subs scope 1)))]
+                         (when (contains? known cap) cap))))
+        from-cls  (fn [from] (first (str/split from #"/")))
+        edges     (->> rs
+                       (keep (fn [{:keys [from to]}]
+                               (let [fc (from-cls from)
+                                     tc (scope->cls to)]
+                                 (when (and tc (not= fc tc))
+                                   [fc tc]))))
+                       distinct)
+        all-cls   (into known (concat (map first edges) (map second edges)))
+        in-deg    (reduce (fn [m [_ t]] (update m t (fnil inc 0)))
+                          (zipmap all-cls (repeat 0))
+                          edges)
+        adj       (reduce (fn [m [f t]] (update m f (fnil conj #{}) t))
+                          {} edges)]
+    ;; Kahn's algorithm（BFS トポロジカルソート）
+    (loop [queue  (into clojure.lang.PersistentQueue/EMPTY
+                        (keep (fn [[c d]] (when (zero? d) c)) in-deg))
+           deg    in-deg
+           result []]
+      (if (empty? queue)
+        ;; 循環依存の残りを末尾に追記
+        (vec (concat result (keys (filter (fn [[_ d]] (pos? d)) deg))))
+        (let [node (peek queue)
+              deps (get adj node #{})]
+          (recur (reduce (fn [q t]
+                           (let [d (dec (get deg t 0))]
+                             (if (zero? d) (conj q t) q)))
+                         (pop queue) deps)
+                 (reduce (fn [d t] (update d t dec)) deg deps)
+                 (conj result node)))))))
 
 ;; -------------------------
 ;; visualize

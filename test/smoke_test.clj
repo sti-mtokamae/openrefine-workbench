@@ -209,5 +209,32 @@
     ;; 中心シンボル自身は含まれる
     (assert= "neighborhood に中心シンボルあり" true (contains? nb top)))
 
+  ;; core/jrefs — Java refs のノイズフィルタ確認
+  (println "\n=== core/jrefs ===")
+  (let [root (or (first *command-line-args*) "trials/samples/repo")
+        _    (core/jref! [root] :trial "smoke-java2")
+        rs   (core/jrefs :trial "smoke-java2")]
+    (assert-pos "jrefs 件数" (count rs))
+    (assert= "assertThat が除外されている" false
+             (boolean (some #(= "assertThat" (:to %)) rs)))
+    (assert= "<top-level> が除外されている" false
+             (boolean (some #(= "<top-level>" (:from %)) rs))))
+
+  ;; core/jrefs :exclude-test
+  (println "\n=== core/jrefs :exclude-test ===")
+  (let [root (or (first *command-line-args*) "trials/samples/repo")
+        rs   (core/jrefs :trial "smoke-java2" :exclude-test true)]
+    (assert= "Test クラスが除外されている" false
+             (boolean (some #(re-find #"(Test|Tests)/" (:from %)) rs))))
+
+  ;; core/topo-sort — 基本動作確認
+  (println "\n=== core/topo-sort ===")
+  (let [root   (or (first *command-line-args*) "trials/samples/repo")
+        rs     (core/jrefs :trial "smoke-java2" :exclude-test true)
+        sorted (core/topo-sort :rs rs)]
+    (assert= "topo-sort が vector" true (vector? sorted))
+    (assert-pos "topo-sort 件数" (count sorted))
+    (assert= "重複なし" (count sorted) (count (distinct sorted))))
+
   (core/stop!)
   (println "\n=== all core/ tests passed ==="))
