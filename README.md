@@ -159,6 +159,7 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `refs` — 内部呼び出しグラフ（ノイズフィルタ付き） | ✅ |
 | `call-tree` / `call-tree-str` — 呼び出し木表示 | ✅ |
 | `fan-out` / `fan-in` / `hotspots` — 依存メトリクス | ✅ |
+| `impact` / `deps` / `neighborhood` — ピンポイント影響分析 | ✅ |
 | `bin/analyze` — 解析ショートカット CLI | ✅ |
 
 ### OpenRefine trial ワークフロー

@@ -197,3 +197,76 @@
      (hotspots 5)"
   ([] (hotspots 10))
   ([n] (take n (fan-in))))
+
+;; -------------------------
+;; pinpoint analysis
+;; -------------------------
+
+(defn impact
+  "sym を変更したときに影響を受けるシンボル（上流方向）を返す。
+   すなわち sym を直接・間接的に呼び出している呼び出し元を BFS で展開する。
+
+   opts:
+     :depth - 探索深さ（デフォルト Integer/MAX_VALUE = 全上流）
+     :rs    - 対象 refs（デフォルト (refs)）
+
+   例:
+     (impact \"com.example.OrderService/save\")
+     (impact \"com.example.OrderService/save\" :depth 2)"
+  [sym & {:keys [depth rs] :or {depth Integer/MAX_VALUE}}]
+  (let [rs     (or rs (refs))
+        ;; to -> #{from ...} の逆引きマップ
+        rev    (reduce (fn [m {:keys [from to]}]
+                         (update m to (fnil conj #{}) from))
+                       {} rs)]
+    (loop [frontier #{sym} visited #{sym} d 0]
+      (if (or (empty? frontier) (>= d depth))
+        (disj visited sym)
+        (let [next (->> frontier
+                        (mapcat #(get rev % #{}))
+                        (remove visited)
+                        set)]
+          (recur next (into visited next) (inc d)))))))
+
+(defn deps
+  "sym が依存しているシンボル（下流方向）を返す。
+   すなわち sym が直接・間接的に呼び出している呼び出し先を BFS で展開する。
+
+   opts:
+     :depth - 探索深さ（デフォルト Integer/MAX_VALUE = 全下流）
+     :rs    - 対象 refs（デフォルト (refs)）
+
+   例:
+     (deps \"com.example.OrderService/save\")
+     (deps \"com.example.OrderService/save\" :depth 2)"
+  [sym & {:keys [depth rs] :or {depth Integer/MAX_VALUE}}]
+  (let [rs      (or rs (refs))
+        ;; from -> #{to ...} の順引きマップ
+        forward (reduce (fn [m {:keys [from to]}]
+                          (update m from (fnil conj #{}) to))
+                        {} rs)]
+    (loop [frontier #{sym} visited #{sym} d 0]
+      (if (or (empty? frontier) (>= d depth))
+        (disj visited sym)
+        (let [next (->> frontier
+                        (mapcat #(get forward % #{}))
+                        (remove visited)
+                        set)]
+          (recur next (into visited next) (inc d)))))))
+
+(defn neighborhood
+  "sym を中心に上流・下流両方向へ depth ホップ以内のシンボル集合を返す。
+   切り出し範囲の推定に使う。
+
+   opts:
+     :depth - 探索深さ（デフォルト 2）
+     :rs    - 対象 refs（デフォルト (refs)）
+
+   例:
+     (neighborhood \"com.example.OrderService\")
+     (neighborhood \"com.example.OrderService\" :depth 3)"
+  [sym & {:keys [depth rs] :or {depth 2}}]
+  (let [rs   (or rs (refs))
+        ups  (impact sym :depth depth :rs rs)
+        downs (deps   sym :depth depth :rs rs)]
+    (into #{sym} (concat ups downs))))

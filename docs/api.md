@@ -27,6 +27,12 @@ REPL / AI Agent 向けの統合エントリポイント。
 | `(core/fan-in refs)` | refs を指定して fan-in を計算 |
 | `(core/hotspots)` | fan-in 上位 10 シンボルを返す |
 | `(core/hotspots n)` | fan-in 上位 n シンボルを返す |
+| `(core/impact sym)` | sym を変えると壊れる上流シンボル集合（BFS） |
+| `(core/impact sym :depth n)` | 探索深さを n ホップに限定 |
+| `(core/deps sym)` | sym が依存する下流シンボル集合（BFS） |
+| `(core/deps sym :depth n)` | 探索深さを n ホップに限定 |
+| `(core/neighborhood sym)` | sym の上流+下流 2 ホップ以内のシンボル集合（切り出し範囲推定） |
+| `(core/neighborhood sym :depth n)` | 探索深さを指定 |
 
 ### 使用例
 
@@ -69,6 +75,14 @@ REPL / AI Agent 向けの統合エントリポイント。
 (core/fan-in)                      ; 被依存数降順。高いほど重要
 (core/hotspots)                    ; fan-in 上位 10 シンボル（デフォルト）
 (core/hotspots 5)                  ; 上位 5 シンボル
+
+;; ピンポイント分析（切り出し候補の調査）
+(core/impact "com.example.OrderService/save")        ; 上流（何が壊れるか）
+(core/impact "com.example.OrderService/save" :depth 2) ; 2 ホップまで
+(core/deps   "com.example.OrderService/save")        ; 下流（何に依存しているか）
+(core/deps   "com.example.OrderService/save" :depth 2)
+(core/neighborhood "com.example.OrderService")       ; 上流+下流 2 ホップの切り出し範囲
+(core/neighborhood "com.example.OrderService" :depth 3)
 
 ;; ツリー表示
 (core/tree)

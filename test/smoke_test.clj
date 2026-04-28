@@ -185,5 +185,29 @@
   (let [hs (core/hotspots 3)]
     (assert= "hotspots 件数 ≤ 3" true (<= (count hs) 3))
     (assert= ":symbol キーあり" true (every? #(contains? % :symbol) hs)))
+
+  ;; core/impact — hotspot の先頭シンボルへの上流を探索
+  (println "\n=== core/impact ===")
+  (let [top (-> (core/hotspots 1) first :symbol)
+        result (core/impact top :depth 1)]
+    (assert= "impact が set" true (set? result))
+    ;; 自分自身は含まれない
+    (assert= "impact に自分自身なし" false (contains? result top)))
+
+  ;; core/deps — 同じシンボルの下流を探索
+  (println "\n=== core/deps ===")
+  (let [top (-> (core/hotspots 1) first :symbol)
+        result (core/deps top :depth 1)]
+    (assert= "deps が set" true (set? result))
+    (assert= "deps に自分自身なし" false (contains? result top)))
+
+  ;; core/neighborhood — 上流+下流の合体
+  (println "\n=== core/neighborhood ===")
+  (let [top (-> (core/hotspots 1) first :symbol)
+        nb  (core/neighborhood top :depth 1)]
+    (assert= "neighborhood が set" true (set? nb))
+    ;; 中心シンボル自身は含まれる
+    (assert= "neighborhood に中心シンボルあり" true (contains? nb top)))
+
   (core/stop!)
   (println "\n=== all core/ tests passed ==="))
