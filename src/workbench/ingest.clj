@@ -106,3 +106,68 @@
     (when (seq del-txs) (xt/execute-tx node del-txs))
     (when (seq put-txs) (xt/execute-tx node put-txs))
     (count put-txs)))
+
+;; -------------------------
+;; co-change (git history)
+;; -------------------------
+
+(defn- git-log-commits
+  "git log --name-only をストリーム処理し、コミットごとのファイルリストを lazy seq で返す。"
+  [repo-path extra-args]
+  (let [cmd  (into ["git" "-C" repo-path "log" "--name-only" "--format=COMMIT:%H"] extra-args)
+        proc (-> (ProcessBuilder. ^java.util.List cmd)
+                 (.redirectErrorStream true)
+                 .start)
+        rdr  (java.io.BufferedReader.
+               (java.io.InputStreamReader. (.getInputStream proc)))
+        lines (line-seq rdr)]
+    ;; COMMIT: 行でグループ化し、各グループのファイル名リストを返す
+    (->> (partition-by #(str/starts-with? % "COMMIT:") lines)
+         (remove (fn [g] (str/starts-with? (first g) "COMMIT:")))
+         (map (fn [g] (->> g (map str/trim) (remove str/blank?) vec)))
+         (remove empty?))))
+
+(defn- commit-pairs
+  "ファイルリスト → ペア列（a < b）"
+  [files]
+  (let [fs (vec (sort files))]
+    (for [i (range (count fs))
+          j (range (inc i) (count fs))]
+      [(fs i) (fs j)])))
+
+(defn cochange!
+  "Git 履歴から共変更（co-change）ペアを集計して XTDB :cochanges テーブルに put する。
+   差分同期（削除＋追加）を行うので冪等。
+
+   repo-path: git リポジトリルート（文字列）
+   opts:
+     :trial       - トライアル識別子（文字列）
+     :filter-path - 解析対象パス（git log -- <path> で絞り込み）
+
+   例:
+     (ingest/cochange! node \"/path/to/repo\")
+     (ingest/cochange! node \"/path/to/tradehub\" :trial \"tradehub\" :filter-path \"src/main/java\")"
+  [node repo-path & {:keys [trial filter-path]}]
+  (let [extra-args (when filter-path ["--" filter-path])
+        counts   (->> (git-log-commits repo-path extra-args)
+                      (mapcat commit-pairs)
+                      frequencies)
+        id-prefix (if trial (str trial "::") "")
+        new-docs (mapv (fn [[[a b] cnt]]
+                         {:xt/id    (str id-prefix a "::" b)
+                          :cc/trial trial
+                          :cc/a     a
+                          :cc/b     b
+                          :cc/count cnt})
+                       counts)
+        new-ids  (set (map :xt/id new-docs))
+        old-ids  (->> (xt/q node '(from :cochanges [{:xt/id id :cc/trial t}]))
+                      (filter #(= (:t %) trial))
+                      (map :id)
+                      set)
+        del-txs  (mapv (fn [id] [:delete-docs :cochanges id]) (set/difference old-ids new-ids))]
+    (when (seq del-txs) (xt/execute-tx node del-txs))
+    ;; 大量 docs を一括送信すると Arrow がヒープを使い切るため 500 件ずつ投入
+    (doseq [batch (partition-all 500 new-docs)]
+      (xt/execute-tx node (mapv (fn [doc] [:put-docs :cochanges doc]) batch)))
+    (count new-docs)))

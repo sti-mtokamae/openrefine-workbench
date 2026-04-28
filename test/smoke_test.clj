@@ -236,5 +236,22 @@
     (assert-pos "topo-sort 件数" (count sorted))
     (assert= "重複なし" (count sorted) (count (distinct sorted))))
 
+  ;; core/cochange! — openrefine-work 自身の git 履歴で確認
+  (println "\n=== core/cochange! ===")
+  (let [n (core/cochange! "." :trial "smoke-git" :filter-path "src")]
+    (assert-pos "cochange! 件数" n)
+    (let [rows (core/cochanges :trial "smoke-git")]
+      (assert-pos "cochanges 件数" (count rows))
+      (assert= ":a キーあり"   true (every? #(contains? % :a)   rows))
+      (assert= ":b キーあり"   true (every? #(contains? % :b)   rows))
+      (assert= ":cnt キーあり" true (every? #(contains? % :cnt) rows))
+      (assert= "降順に並んでいる" true (apply >= (map :cnt rows)))
+      ;; 冪等性
+      (core/cochange! "." :trial "smoke-git" :filter-path "src")
+      (assert= "再投入後も件数が同じ（冪等性）" n (count (core/cochanges :trial "smoke-git")))
+      ;; :min-count フィルタ
+      (let [rows2 (core/cochanges :trial "smoke-git" :min-count 2)]
+        (assert= "min-count フィルタ" true (every? #(>= (:cnt %) 2) rows2)))))
+
   (core/stop!)
   (println "\n=== all core/ tests passed ==="))

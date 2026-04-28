@@ -8,11 +8,13 @@
 
  :aliases
  {:xtdb
-  {:jvm-opts ["--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED"
+  {:jvm-opts ["-Xmx768m"
+               "--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED"
                "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]}
 
   :repl
   {:extra-deps {nrepl/nrepl {:mvn/version "1.3.0"}}
-   :jvm-opts   ["--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED"
+   :jvm-opts   ["-Xmx768m"
+                "--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED"
                 "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"]
    :main-opts  ["-m" "nrepl.cmdline"]}}}

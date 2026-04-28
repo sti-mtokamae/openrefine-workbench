@@ -358,3 +358,40 @@
         ups  (impact sym :depth depth :rs rs)
         downs (deps   sym :depth depth :rs rs)]
     (into #{sym} (concat ups downs))))
+
+;; -------------------------
+;; co-change (git history)
+;; -------------------------
+
+(defn cochange!
+  "Git 履歴から共変更（co-change）ペアを集計して XTDB :cochanges テーブルに取り込む。
+   差分同期を行うので冪等。
+
+   repo-path: git リポジトリルート（文字列）
+   opts:
+     :trial       - トライアル識別子（文字列）
+     :filter-path - git log -- <path> で解析対象を絞り込む
+
+   例:
+     (cochange! \"/path/to/repo\")
+     (cochange! \"/path/to/tradehub\" :trial \"tradehub\" :filter-path \"src/main/java\")"
+  [repo-path & {:keys [trial filter-path]}]
+  (ingest/cochange! (node) repo-path :trial trial :filter-path filter-path))
+
+(defn cochanges
+  "共変更ペアを count 降順で返す。
+
+   opts:
+     :trial     - トライアル識別子でフィルタ
+     :top       - 上位 N 件に絞る（デフォルト nil = 全件）
+     :min-count - 最小共変更回数（デフォルト 1）
+
+   例:
+     (cochanges :trial \"tradehub\" :top 20)
+     (cochanges :trial \"tradehub\" :min-count 3)"
+  [& {:keys [trial top min-count] :or {min-count 1}}]
+  (let [rs (->> (q '(from :cochanges [{:xt/id id :cc/a a :cc/b b :cc/count cnt :cc/trial t}]))
+                (filter #(or (nil? trial) (= trial (:t %))))
+                (filter #(>= (:cnt %) min-count))
+                (sort-by :cnt >))]
+    (if top (take top rs) rs)))
