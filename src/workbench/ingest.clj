@@ -102,10 +102,11 @@
                      (map :id)
                      set)
         del-txs (mapv (fn [id] [:delete-docs :refs id]) (set/difference old-ids new-ids))
-        put-txs (mapv (fn [r] [:put-docs :refs (ref->doc r trial)]) refs)]
+        put-docs (mapv (fn [r] (ref->doc r trial)) refs)]
     (when (seq del-txs) (xt/execute-tx node del-txs))
-    (when (seq put-txs) (xt/execute-tx node put-txs))
-    (count put-txs)))
+    (doseq [batch (partition-all 2000 put-docs)]
+      (xt/execute-tx node (mapv (fn [doc] [:put-docs :refs doc]) batch)))
+    (count put-docs)))
 
 ;; -------------------------
 ;; co-change (git history)
@@ -167,7 +168,7 @@
                       set)
         del-txs  (mapv (fn [id] [:delete-docs :cochanges id]) (set/difference old-ids new-ids))]
     (when (seq del-txs) (xt/execute-tx node del-txs))
-    ;; 大量 docs を一括送信すると Arrow がヒープを使い切るため 500 件ずつ投入
-    (doseq [batch (partition-all 500 new-docs)]
+    ;; 大量 docs を一括送信すると Arrow が heap を使い切るため 2000 件ずつ投入
+    (doseq [batch (partition-all 2000 new-docs)]
       (xt/execute-tx node (mapv (fn [doc] [:put-docs :cochanges doc]) batch)))
     (count new-docs)))

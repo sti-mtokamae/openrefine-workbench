@@ -116,8 +116,8 @@
                      (filter #(= (:t %) trial))
                      (map :id)
                      set)
-        del-txs (mapv (fn [id] [:delete-docs :refs id]) (set/difference old-ids new-ids))
-        put-txs (mapv #(vector :put-docs :refs %) docs)]
+        del-txs (mapv (fn [id] [:delete-docs :refs id]) (set/difference old-ids new-ids))]
     (when (seq del-txs) (xt/execute-tx node del-txs))
-    (when (seq put-txs) (xt/execute-tx node put-txs))
-    (count put-txs)))
+    (doseq [batch (partition-all 2000 docs)]
+      (xt/execute-tx node (mapv #(vector :put-docs :refs %) batch)))
+    (count docs)))
