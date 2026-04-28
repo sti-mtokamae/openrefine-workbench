@@ -6,9 +6,13 @@
    [clojure.set     :as set]
    [xtdb.api        :as xt])
   (:import
-   [com.github.javaparser StaticJavaParser]
+   [com.github.javaparser StaticJavaParser ParserConfiguration ParserConfiguration$LanguageLevel]
    [com.github.javaparser.ast.expr MethodCallExpr]
    [com.github.javaparser.ast.body MethodDeclaration ClassOrInterfaceDeclaration]))
+
+;; Java 21 の構文（Record, Switch expression, Text Block, Pattern matching 等）を解析できるよう設定
+(.setLanguageLevel (StaticJavaParser/getParserConfiguration)
+                   ParserConfiguration$LanguageLevel/JAVA_21)
 
 ;; -------------------------
 ;; helpers

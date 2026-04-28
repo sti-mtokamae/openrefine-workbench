@@ -125,6 +125,29 @@
    (->> (refs)
         (filter #(str/starts-with? (:from %) ns-prefix)))))
 
+(defn jrefs
+  "Java ソースの呼び出しグラフを返す。
+   JUnit/Mockito・Java 標準ライブラリ等のノイズを除外し、
+   prefix で始まるクラス呼び出しのみ残す。
+
+   opts:
+     :trial  - トライアル識別子でフィルタ（文字列）
+     :prefix - 残す :ref/from の先頭文字列（デフォルト nil = 全件）
+
+   例:
+     (jrefs :trial \"tradehub\")
+     (jrefs :trial \"tradehub\" :prefix \"AclService\")"
+  [& {:keys [trial prefix]}]
+  (let [noise #"^(when|verify|any|eq|times|never|mock|spy|doReturn|doThrow|assert|assertEquals|assertThat|assertNotNull|assertNull|assertTrue|assertFalse|given|then|willReturn|Arrays\.|Collections\.|List\.|Map\.|Optional\.|String\.|Objects\.|UUID\.|Math\.|System\.|log\.|super\.|this\.|result\.)"
+        rs    (->> (q '(from :refs [{:ref/from from :ref/to to :ref/trial t :ref/file file :ref/line line}]
+                              (order-by from to)))
+                   (filter #(or (nil? trial) (= trial (:t %))))
+                   (remove #(re-find noise (:to %)))
+                   (remove #(= "<top-level>" (:from %))))]
+    (if prefix
+      (filter #(str/starts-with? (:from %) prefix) rs)
+      rs)))
+
 ;; -------------------------
 ;; visualize
 ;; -------------------------
