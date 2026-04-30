@@ -293,6 +293,8 @@
 (defn impact
   "sym を変更したときに影響を受けるシンボル（上流方向）を返す。
    すなわち sym を直接・間接的に呼び出している呼び出し元を BFS で展開する。
+   sym に '/' がない場合（クラス名）は :ref/to に対して
+   sym + '/' の前方一致で展開する。
 
    opts:
      :depth - 探索深さ（デフォルト Integer/MAX_VALUE = 全上流）
@@ -306,12 +308,22 @@
         ;; to -> #{from ...} の逆引きマップ
         rev    (reduce (fn [m {:keys [from to]}]
                          (update m to (fnil conj #{}) from))
-                       {} rs)]
+                       {} rs)
+        rev-keys (set (keys rev))
+        ;; sym がクラス名（'/' なし）の場合は sym + '/' 前方一致で展開
+        expand  (fn [s]
+                  (if (clojure.string/includes? s "/")
+                    (get rev s #{})
+                    (let [prefix (str s "/")]
+                      (->> rev-keys
+                           (filter #(clojure.string/starts-with? % prefix))
+                           (mapcat #(get rev % #{}))
+                           set))))]
     (loop [frontier #{sym} visited #{sym} d 0]
       (if (or (empty? frontier) (>= d depth))
         (disj visited sym)
         (let [next (->> frontier
-                        (mapcat #(get rev % #{}))
+                        (mapcat expand)
                         (remove visited)
                         set)]
           (recur next (into visited next) (inc d)))))))
@@ -319,6 +331,8 @@
 (defn deps
   "sym が依存しているシンボル（下流方向）を返す。
    すなわち sym が直接・間接的に呼び出している呼び出し先を BFS で展開する。
+   sym に '/' がない場合（クラス名）は :ref/from に対して
+   sym + '/' の前方一致で展開する。
 
    opts:
      :depth - 探索深さ（デフォルト Integer/MAX_VALUE = 全下流）
@@ -332,12 +346,22 @@
         ;; from -> #{to ...} の順引きマップ
         forward (reduce (fn [m {:keys [from to]}]
                           (update m from (fnil conj #{}) to))
-                        {} rs)]
+                        {} rs)
+        fwd-keys (set (keys forward))
+        ;; sym がクラス名（'/' なし）の場合は sym + '/' 前方一致で展開
+        expand  (fn [s]
+                  (if (clojure.string/includes? s "/")
+                    (get forward s #{})
+                    (let [prefix (str s "/")]
+                      (->> fwd-keys
+                           (filter #(clojure.string/starts-with? % prefix))
+                           (mapcat #(get forward % #{}))
+                           set))))]
     (loop [frontier #{sym} visited #{sym} d 0]
       (if (or (empty? frontier) (>= d depth))
         (disj visited sym)
         (let [next (->> frontier
-                        (mapcat #(get forward % #{}))
+                        (mapcat expand)
                         (remove visited)
                         set)]
           (recur next (into visited next) (inc d)))))))
