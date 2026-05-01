@@ -33,6 +33,9 @@ REPL / AI Agent 向けの統合エントリポイント。
 | `(core/deps sym :depth n)` | 探索深さを n ホップに限定 |
 | `(core/neighborhood sym)` | sym の上流+下流 2 ホップ以内のシンボル集合（切り出し範囲推定） |
 | `(core/neighborhood sym :depth n)` | 探索深さを指定 |
+| `(core/export-gexf! refs path)` | refs を GEXF ファイルとして出力（Gephi / Cytoscape 用） |
+| `(core/export-gexf! refs path :level :class)` | クラス単位に集約（推奨。千クラス規模でも Gephi が軽い） |
+| `(core/export-gexf! refs path :level :method)` | メソッド単位（デフォルト） |
 
 ### 使用例
 
@@ -83,6 +86,11 @@ REPL / AI Agent 向けの統合エントリポイント。
 (core/deps   "com.example.OrderService/save" :depth 2)
 (core/neighborhood "com.example.OrderService")       ; 上流+下流 2 ホップの切り出し範囲
 (core/neighborhood "com.example.OrderService" :depth 3)
+
+;; GEXF エクスポート（Gephi / Cytoscape 向け）
+(core/export-gexf! (core/jrefs :trial "my-trial") "exports/graph.gexf" :level :class)
+;; メソッド単位（ファイルが大きい。局所ビュー向け）
+(core/export-gexf! (core/jrefs :trial "my-trial") "exports/graph-method.gexf")
 
 ;; ツリー表示
 (core/tree)

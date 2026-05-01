@@ -58,7 +58,7 @@ ingest → query → visualize
 │       ├── ingest.clj         # dir! / xref! — XTDB への取り込み
 │       ├── jref.clj           # jref!  — Java xref 解析（JavaParser）
 │       ├── query.clj          # q      — XTDB クエリ薄ラッパー
-│       └── visualize.clj      # tree / tree-str — 結果の可視化
+│       └── visualize.clj      # tree / call-tree / gexf — 結果の可視化
 ├── test/
 │   └── smoke_test.clj
 ├── docs/
@@ -160,6 +160,7 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `call-tree` / `call-tree-str` — 呼び出し木表示 | ✅ |
 | `fan-out` / `fan-in` / `hotspots` — 依存メトリクス | ✅ |
 | `impact` / `deps` / `neighborhood` — ピンポイント影響分析 | ✅ |
+| `export-gexf!` — GEXF エクスポート（Gephi / Cytoscape 連携） | ✅ |
 | `bin/analyze` — 解析ショートカット CLI | ✅ |
 
 ### OpenRefine trial ワークフロー
