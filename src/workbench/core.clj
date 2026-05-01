@@ -242,6 +242,26 @@
   [refs root]
   (visualize/call-tree-str refs root))
 
+(defn export-gexf!
+  "refs を GEXF ファイルとして書き出す。Gephi / Cytoscape でインポート可能。
+
+   opts:
+     :level - :method（デフォルト）or :class（クラス単位に集約）
+
+   ファイルサイズの目安:
+     :method 10万エッジ → 数十 MB
+     :class  1万クラス  → 数 MB（Gephi が快適）
+
+   例:
+     (export-gexf! (jrefs :trial \"tradehub\") \"tradehub.gexf\")
+     (export-gexf! (jrefs :trial \"tradehub\") \"tradehub-class.gexf\" :level :class)"
+  [refs path & {:keys [level] :or {level :method}}]
+  (spit path (visualize/gexf refs :level level))
+  (println (str "written → " path " ("
+                (count (slurp path))
+                " bytes)"))
+  path)
+
 ;; -------------------------
 ;; metrics
 ;; -------------------------

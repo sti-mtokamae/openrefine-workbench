@@ -351,7 +351,57 @@ workbench.core/tree
 
 ---
 
-## 8. 後片付け
+## 8. グラフを Gephi で可視化する
+
+千クラス・万メソッド規模のコードベースはテキスト出力では全体像を掴みにくい。
+`export-gexf!` で GEXF ファイルを出力し、Gephi（Windows 推奨）で可視化する。
+
+### GEXF を出力する
+
+```clojure
+;; クラス単位（Gephi での俯瞰用・推奨）
+(core/export-gexf! (core/jrefs :trial "tradehub")
+                   "exports/tradehub-class.gexf"
+                   :level :class)
+
+;; メソッド単位（局所ビュー用・ファイルが大きい）
+(core/export-gexf! (core/jrefs :trial "tradehub")
+                   "exports/tradehub-method.gexf"
+                   :level :method)
+```
+
+`:class` レベルでは同クラス間エッジの重複が `weight` として集計される。
+フィルタ済みの refs を渡すことで特定ノイズ（ACL/IDA 等）を除外できる。
+
+### ファイルサイズの目安
+
+| レベル | 1202クラス(tradehub) |
+|---|---|
+| `:class` | 約 670 KB |
+| `:method` | 約 1.3 MB |
+
+### Gephi の基本ワークフロー
+
+1. **開く** — File → Open → `.gexf`
+2. **レイアウト** — Layout パネル → **ForceAtlas 2** → Run（数十秒〜数分）→ Stop
+3. **コミュニティ検出** — Statistics → **Modularity** → Run（コミュニティごとに色分け）
+4. **色付け** — Appearance → Nodes → Partition → **Modularity Class** → Apply
+5. **サイズ** — Appearance → Nodes → Ranking → **Degree**（または In-Degree）→ Apply
+6. **フィルタ** — Filters → Topology → **Degree Range** で孤立ノード除外
+7. **保存** — File → Save → `.gephi`（以降はここから再開）
+
+### Windows へのファイル受け渡し
+
+```clojure
+;; WSL から Windows デスクトップに直接出力
+(core/export-gexf! rs "/mnt/c/Users/<username>/Desktop/graph.gexf" :level :class)
+```
+
+または エクスプローラーのアドレスバーに `\\wsl$\Ubuntu\home\<user>\...` と入力してアクセス。
+
+---
+
+## 9. 後片付け
 
 ```clojure
 (core/stop!)

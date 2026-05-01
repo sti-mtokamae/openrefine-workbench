@@ -1,6 +1,8 @@
 (ns workbench.visualize
   "クエリ結果をテキスト形式で可視化する関数群。"
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str])
+  (:import [java.time LocalDate]
+           [java.time.format DateTimeFormatter]))
 
 ;; -------------------------
 ;; helpers
@@ -74,3 +76,74 @@
      (println (visualize/call-tree-str (core/refs) \"workbench.core/ingest!\"))"
   [refs root]
   (with-out-str (call-tree refs root)))
+
+;; -------------------------
+;; GEXF export (Gephi)
+;; -------------------------
+
+(defn- xml-escape [s]
+  (-> s
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
+
+(defn gexf
+  "refs を GEXF 1.3 形式の文字列に変換する。Gephi / Cytoscape でインポート可能。
+
+   opts:
+     :level - :method（デフォルト、シンボル単位）
+              :class（クラス名単位に集約。エッジに weight 付き）
+
+   :class レベルでは同クラス内呼び出しは除外され、
+   同クラス間エッジの重複は weight（出現回数）として集計される。
+
+   例:
+     ;; メソッド単位でフルグラフ
+     (spit \"graph.gexf\" (visualize/gexf (core/jrefs :trial \"tradehub\")))
+
+     ;; クラス単位に集約（Gephi が軽くなる）
+     (spit \"graph.gexf\" (visualize/gexf (core/jrefs :trial \"tradehub\") :level :class))"
+  [refs & {:keys [level] :or {level :method}}]
+  (let [normalize   (if (= level :class)
+                      (fn [s] (first (str/split s #"/")))
+                      identity)
+        ;; [from to] → 出現回数（weight）
+        edge-counts (->> refs
+                         (map (fn [{:keys [from to]}]
+                                [(normalize from) (normalize to)]))
+                         (remove (fn [[f t]] (= f t)))
+                         frequencies)
+        edges       (seq edge-counts)
+        ;; ノード一覧（ソート済み）→ ラベル→整数ID マップ
+        nodes       (->> edges
+                         (mapcat (fn [[[f t] _]] [f t]))
+                         (into #{})
+                         sort
+                         (map-indexed (fn [i n] [n i]))
+                         (into {}))
+        today       (.format (LocalDate/now) DateTimeFormatter/ISO_LOCAL_DATE)]
+    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         "<gexf xmlns=\"http://gexf.net/1.3\" version=\"1.3\">\n"
+         "  <meta lastmodifieddate=\"" today "\">\n"
+         "    <creator>openrefine-workbench</creator>\n"
+         "  </meta>\n"
+         "  <graph defaultedgetype=\"directed\">\n"
+         "    <nodes>\n"
+         (str/join
+          (map (fn [[label id]]
+                 (str "      <node id=\"" id
+                      "\" label=\"" (xml-escape label) "\"/>\n"))
+               nodes))
+         "    </nodes>\n"
+         "    <edges>\n"
+         (str/join
+          (map-indexed (fn [i [[f t] w]]
+                         (str "      <edge id=\"" i
+                              "\" source=\"" (get nodes f)
+                              "\" target=\"" (get nodes t)
+                              "\" weight=\"" w "\"/>\n"))
+                       edges))
+         "    </edges>\n"
+         "  </graph>\n"
+         "</gexf>\n")))
