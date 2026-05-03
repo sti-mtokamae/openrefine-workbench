@@ -146,6 +146,124 @@ neighborhood の結果から Java 標準クラス（`Collections`・`String` 等
 
 ---
 
+## フェーズ 6: GEXF エクスポートと Gephi 可視化
+
+静的依存グラフを GEXF に出力し、Gephi で対話的に可視化する。
+
+```clojure
+(core/export-gexf! rs "exports/my-project.gexf"
+                   :level :class
+                   :module-fn module-fn)
+```
+
+### パラメータ
+
+| パラメータ | 既定値 | 説明 |
+|-----------|--------|------|
+| `rs` | — | `core/q` で取得した `:refs` クエリ結果 |
+| `path` | — | 出力先ファイルパス（`.gexf` 拡張子）|
+| `:level` | `:method` | `:class`（クラス粒度）または `:method`（メソッド粒度）|
+| `:module-fn` | `nil` | クラス名 → モジュール名の関数。指定しない場合は `"(unknown)"`|
+
+クラス粒度から始め、全体像を把握してからメソッド粒度に掘り下げると見通しがよい。
+
+### `:module-fn` の作り方
+
+XTDB の `:refs` に含まれる `:ref/file` パスからモジュール名を逆引きする：
+
+```clojure
+(let [mod-map (->> (core/q '(from :refs [{:ref/from from :ref/trial t :ref/file file}]))
+                   (filter #(= "my-project" (:t %)))
+                   (keep (fn [{:keys [from file]}]
+                           (when (and file
+                                      (re-find #"com/example/web/([^/]+)/" file))
+                             [(first (clojure.string/split from #"/"))
+                              (second (re-find #"com/example/web/([^/]+)/" file))])))
+                   (into {}))
+      module-fn (fn [label] (get mod-map label "(unknown)"))]
+  (core/export-gexf! rs "exports/my-project-class.gexf"
+                     :level :class :module-fn module-fn))
+```
+
+### GEXF ノード属性（Data Laboratory で確認可能）
+
+| attvalue | 型 | 内容 |
+|----------|----|------|
+| `in_degree` | integer | このノードへの参照数（呼ばれる多さ）|
+| `out_degree` | integer | このノードからの参照数（呼ぶ多さ）|
+| `module` | string | `module-fn` が返すモジュール名 |
+| `type` | string | `Controller` / `ServiceImpl` / `Service` / `Mapper` / `Other` |
+
+エッジの `weight` は2クラス（またはメソッド）間の静的呼び出し本数を集計した値。
+
+---
+
+### Gephi での操作手順
+
+#### 1. インポート
+
+1. **File → Open** で `.gexf` を開く
+2. インポートダイアログ: **Graph Type: Directed**、**New workspace** → **OK**
+
+#### 2. レイアウト（Layout パネル）
+
+| レイアウト | 用途 |
+|-----------|------|
+| **Force Atlas 2** | モジュール・クラスタを自然に分離。最初にこれをかける |
+| **Yifan Hu** | 大規模グラフ向け。素早く収束 |
+
+Force Atlas 2 の推奨設定：
+- **Scaling**: 2.0〜5.0（ノードが重なる場合は大きくする）
+- **Prevent Overlap**: ON にして実行後に止める
+
+#### 3. ノードサイズ → in-degree（Ranking）
+
+GEXF の `viz:size` が読み込み時に自動反映される。手動調整したい場合：
+
+1. **Appearance**（パレットアイコン）→ **Nodes** タブ → **サイズアイコン**（○の大きさ）
+2. **Ranking** タブ → `in_degree` を選択
+3. Min size / Max size を設定 → **Apply**
+
+#### 4. ノード色 → type で種別色分け（Partition）
+
+1. **Appearance** → **Nodes** タブ → **色アイコン（🎨）**
+2. **Partition** タブ → `type` を選択（リストに自動表示される）
+3. 各 type に色を設定 → **Apply**
+
+推奨配色：
+
+| type | 色 | 意味 |
+|------|----|------|
+| `Controller` | 赤 `#E74C3C` | HTTP エントリポイント |
+| `ServiceImpl` | 青 `#3498DB` | ビジネスロジック実装 |
+| `Service` | 水色 `#85C1E9` | インターフェース |
+| `Mapper` | 緑 `#2ECC71` | DB アクセス層 |
+| `Other` | グレー `#95A5A6` | その他 |
+
+> **Note**: GEXF の `viz:shape` は Gephi 0.10.x では読み込み時に無視される。
+> 種別の識別には上記 Partition 配色を使う。
+
+#### 5. エッジ太さ → weight（Ranking）
+
+GEXF の `viz:thickness` が自動反映される。手動調整：
+
+1. **Appearance** → **Edges** タブ → **サイズアイコン**
+2. **Ranking** タブ → `weight` を選択 → **Apply**
+
+#### 6. モジュール境界の確認（Partition → module）
+
+1. **Appearance** → **Nodes** → **🎨 Partition** → `module` を選択 → **Apply**
+2. 同色のノード群が空間的にもクラスタを形成していれば凝集度が高い
+3. 異色ノードへのエッジが多いクラスは**モジュール境界を越えた依存**の候補
+
+#### 7. フィルタ・統計
+
+- **Data Laboratory**: ノード/エッジの生データを確認・ソート（`in_degree` 降順など）
+- **Filters パネル** → **Attributes → Equal** → `type = "Controller"` で特定種別を抽出
+- **Statistics パネル** → **Modularity** でクラスタ自動検出（結果は `modularity_class` attvalue として追加される）
+
+---
+
 ## ノイズ除外戦略
 
 ### クラス名プレフィックスによる除外

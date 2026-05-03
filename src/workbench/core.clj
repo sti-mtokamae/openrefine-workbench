@@ -130,6 +130,12 @@
    JUnit/Mockito・Java 標準ライブラリ等のノイズを除外し、
    prefix で始まるクラス呼び出しのみ残す。
 
+   除外されるノイズ:
+     - JUnit/Mockito の assert/verify/mock 系
+     - Java 標準ライブラリ（Collections. / List. / String. 等）
+     - ログ・super・this・単一文字変数（log/ super/ e/ s/ 等のスラッシュ形式）
+     - stream chain 式（カッコを含む複合式。例: foo.bar().baz()...）
+
    opts:
      :trial        - トライアル識別子でフィルタ（文字列）
      :prefix       - 残す :ref/from の先頭文字列（デフォルト nil = 全件）
@@ -140,11 +146,21 @@
      (jrefs :trial \"tradehub\" :exclude-test true)
      (jrefs :trial \"tradehub\" :prefix \"AclService\")"
   [& {:keys [trial prefix exclude-test]}]
-  (let [noise #"^(when|verify|any|eq|times|never|mock|spy|doReturn|doThrow|assert|assertEquals|assertThat|assertNotNull|assertNull|assertTrue|assertFalse|given|then|willReturn|Arrays\.|Collections\.|List\.|Map\.|Optional\.|String\.|Objects\.|UUID\.|Math\.|System\.|log\.|super\.|this\.|result\.)"
+  (let [;; ドット記法ノイズ（Java 標準・テスト・ロガー等）
+        dot-noise #"^(when|verify|any|eq|times|never|mock|spy|doReturn|doThrow|assert|assertEquals|assertThat|assertNotNull|assertNull|assertTrue|assertFalse|given|then|willReturn|Arrays\.|Collections\.|List\.|Map\.|Optional\.|String\.|Objects\.|UUID\.|Math\.|System\.|Boolean\.|log\.|super\.|this\.|result\.)"
+        ;; スラッシュ形式の定型ノイズ（Java 標準クラス static 呼び出し・ロガー等）
+        slash-noise #"^(log|super|this|e|s|r|m|t|entry|row|sheet|result|childBuilder|getUserId|getId|getMessage|getLogger|LOGGER|Logger|UUID|List|Map|Objects|Optional|Collections|Collectors|Arrays|String|Math|Boolean|Integer|Long|Double|LocalDate|LocalDateTime|LocalTime|ZonedDateTime|Calendar|LoggerFactory|StringUtils|HttpStatus|ObjectUtils|Assert|Comparator|Instant|JdbcTemplate|SecurityContextHolder|CellReference|CellRangeAddress|DateUtil|WorkbookFactory)/"
         rs*   (->> (q '(from :refs [{:ref/from from :ref/to to :ref/trial t :ref/file file :ref/line line}]
                               (order-by from to)))
                    (filter #(or (nil? trial) (= trial (:t %))))
-                   (remove #(re-find noise (:to %)))
+                   (remove #(re-find dot-noise (:to %)))
+                   (remove #(re-find slash-noise (:to %)))
+                   ;; stream chain 式: カッコを含む複合式を除外
+                   (remove #(str/includes? (:to %) "("))
+                   ;; 未解決のローカル変数参照（スラッシュなし小文字始まり）を除外
+                   (remove #(re-matches #"[a-z][a-zA-Z0-9]*" (:to %)))
+                   ;; ローカル変数/メソッド呼び出し（小文字始まりのスラッシュ形式: workbook/getSheet 等）を除外
+                   (remove #(re-find #"^[a-z][^/]*/" (:to %)))
                    (remove #(= "<top-level>" (:from %))))
         rs    (if exclude-test
                 (remove #(re-find #"(Test|Tests)/" (:from %)) rs*)
@@ -255,8 +271,8 @@
    例:
      (export-gexf! (jrefs :trial \"tradehub\") \"tradehub.gexf\")
      (export-gexf! (jrefs :trial \"tradehub\") \"tradehub-class.gexf\" :level :class)"
-  [refs path & {:keys [level] :or {level :method}}]
-  (spit path (visualize/gexf refs :level level))
+  [refs path & {:keys [level module-fn] :or {level :method}}]
+  (spit path (visualize/gexf refs :level level :module-fn module-fn))
   (println (str "written → " path " ("
                 (count (slurp path))
                 " bytes)"))
