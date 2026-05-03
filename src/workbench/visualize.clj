@@ -81,6 +81,7 @@
 ;; GEXF export (Gephi)
 ;; -------------------------
 
+
 (defn- xml-escape [s]
   (-> s
       (str/replace "&" "&amp;")
@@ -236,3 +237,228 @@
          "    </edges>\n"
          "  </graph>\n"
          "</gexf>\n")))
+
+;; -------------------------
+;; XGMML export (Cytoscape ネイティブ形式)
+;; -------------------------
+
+(defn xgmml
+  "refs を XGMML 形式の文字列に変換する。Cytoscape のネイティブ XML 形式。
+   GraphML より確実に読み込める。
+
+   opts:
+     :level      - :method（デフォルト）or :class
+     :module-fn  - ラベル文字列 → モジュール名文字列を返す関数
+
+   Cytoscape での属性利用:
+     in_degree / out_degree → Style → Mapping（size / color）
+     module / type          → Style → Mapping（fill color partition）
+     weight（edge）         → Style → Mapping（width）
+
+   例:
+     (spit \"graph.xgmml\"
+           (visualize/xgmml (core/jrefs :trial \"tradehub\")
+                            :level :class
+                            :module-fn #(get mod-map %)))"
+  [refs & {:keys [level module-fn] :or {level :method}}]
+  (let [normalize   (if (= level :class)
+                      (fn [s] (first (str/split s #"/")))
+                      identity)
+        edge-counts (->> refs
+                         (map (fn [{:keys [from to]}]
+                                [(normalize from) (normalize to)]))
+                         (remove (fn [[f t]] (= f t)))
+                         frequencies)
+        edges       (seq edge-counts)
+        nodes       (->> edges
+                         (mapcat (fn [[[f t] _]] [f t]))
+                         (into #{})
+                         sort
+                         (map-indexed (fn [i n] [n (inc i)]))  ; ID は 1 始まり
+                         (into {}))
+        in-deg      (frequencies (map (fn [[[_ t] _]] t) edges))
+        out-deg     (frequencies (map (fn [[[f _] _]] f) edges))
+        node-module (fn [label]
+                      (or (when module-fn (module-fn label)) "(unknown)"))
+        node-type   (fn [label]
+                      (let [cls (first (str/split label #"/"))]
+                        (cond
+                          (re-find #"Controller$" cls)          "Controller"
+                          (re-find #"ServiceImpl$" cls)         "ServiceImpl"
+                          (re-find #"Service$" cls)             "Service"
+                          (re-find #"(Mapper|Repository)$" cls) "Mapper"
+                          :else                                  "Other")))]
+    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         "<graph label=\"graph\"\n"
+         "  xmlns=\"http://www.cs.rpi.edu/XGMML\"\n"
+         "  directed=\"1\">\n"
+         ;; ノード
+         (str/join
+          (map (fn [[label id]]
+                 (str "  <node id=\"" id
+                      "\" label=\"" (xml-escape label) "\">\n"
+                      "    <att name=\"in_degree\"  type=\"integer\" value=\"" (get in-deg label 0) "\"/>\n"
+                      "    <att name=\"out_degree\" type=\"integer\" value=\"" (get out-deg label 0) "\"/>\n"
+                      "    <att name=\"module\"     type=\"string\"  value=\"" (xml-escape (node-module label)) "\"/>\n"
+                      "    <att name=\"type\"       type=\"string\"  value=\"" (xml-escape (node-type label)) "\"/>\n"
+                      "  </node>\n"))
+               nodes))
+         ;; エッジ
+         (str/join
+          (map-indexed (fn [i [[f t] w]]
+                         (str "  <edge id=\"" (inc i)
+                              "\" source=\"" (get nodes f)
+                              "\" target=\"" (get nodes t) "\">\n"
+                              "    <att name=\"weight\" type=\"integer\" value=\"" w "\"/>\n"
+                              "  </edge>\n"))
+                       edges))
+         "</graph>\n")))
+
+;; -------------------------
+;; CSV export (Cytoscape: エッジリスト + ノード属性テーブル)
+;; -------------------------
+
+(defn cytoscape-csvs
+  "refs を Cytoscape 向けの CSV 2 枚に変換する。
+   戻り値: {:edges \"...\" :nodes \"...\"}
+
+   Cytoscape での読み込み手順:
+     1. File → Import → Network from File → *-edges.csv
+        ダイアログで source=source, target=target, interaction=weight に設定
+     2. File → Import → Table from File → *-nodes.csv
+        ダイアログで Key Column = name（既存ノードと照合）
+
+   opts:
+     :level      - :method（デフォルト）or :class
+     :module-fn  - ラベル文字列 → モジュール名文字列を返す関数"
+  [refs & {:keys [level module-fn] :or {level :method}}]
+  (let [normalize   (if (= level :class)
+                      (fn [s] (first (str/split s #"/")))
+                      identity)
+        edge-counts (->> refs
+                         (map (fn [{:keys [from to]}]
+                                [(normalize from) (normalize to)]))
+                         (remove (fn [[f t]] (= f t)))
+                         frequencies)
+        edges       (seq edge-counts)
+        node-labels (->> edges
+                         (mapcat (fn [[[f t] _]] [f t]))
+                         (into #{})
+                         sort)
+        in-deg      (frequencies (map (fn [[[_ t] _]] t) edges))
+        out-deg     (frequencies (map (fn [[[f _] _]] f) edges))
+        node-module (fn [label]
+                      (or (when module-fn (module-fn label)) "(unknown)"))
+        node-type   (fn [label]
+                      (let [cls (first (str/split label #"/"))]
+                        (cond
+                          (re-find #"Controller$" cls)          "Controller"
+                          (re-find #"ServiceImpl$" cls)         "ServiceImpl"
+                          (re-find #"Service$" cls)             "Service"
+                          (re-find #"(Mapper|Repository)$" cls) "Mapper"
+                          :else                                  "Other")))
+        csv-escape  (fn [s]
+                      (if (re-find #"[,\"\n]" s)
+                        (str "\"" (str/replace s "\"" "\"\"") "\"")
+                        s))
+        edges-csv   (str "source,target,weight\n"
+                         (str/join
+                          (map (fn [[[f t] w]]
+                                 (str (csv-escape f) "," (csv-escape t) "," w "\n"))
+                               edges)))
+        nodes-csv   (str "name,in_degree,out_degree,module,type\n"
+                         (str/join
+                          (map (fn [label]
+                                 (str (csv-escape label) ","
+                                      (get in-deg label 0) ","
+                                      (get out-deg label 0) ","
+                                      (csv-escape (node-module label)) ","
+                                      (csv-escape (node-type label)) "\n"))
+                               node-labels)))]
+    {:edges edges-csv :nodes nodes-csv}))
+
+
+
+(defn graphml
+  "refs を GraphML 形式の文字列に変換する。Cytoscape でインポート可能。
+
+   gexf と同じ opts・ロジックを使うが、XML 形式が異なる。
+   viz 拡張なし（Cytoscape では不要）。
+   ノード属性は Cytoscape の Node Table に直接マッピングされる。
+
+   opts:
+     :level      - :method（デフォルト）or :class
+     :module-fn  - ラベル文字列 → モジュール名文字列を返す関数
+
+   Cytoscape での属性利用:
+     in_degree / out_degree → Style → Mapping（size / color）
+     module / type          → Style → Mapping（fill color partition）
+     weight（edge）         → Style → Mapping（width）
+
+   例:
+     (spit \"graph.graphml\"
+           (visualize/graphml (core/jrefs :trial \"tradehub\")
+                              :level :class
+                              :module-fn #(get mod-map %)))"
+  [refs & {:keys [level module-fn] :or {level :method}}]
+  (let [normalize   (if (= level :class)
+                      (fn [s] (first (str/split s #"/")))
+                      identity)
+        edge-counts (->> refs
+                         (map (fn [{:keys [from to]}]
+                                [(normalize from) (normalize to)]))
+                         (remove (fn [[f t]] (= f t)))
+                         frequencies)
+        edges       (seq edge-counts)
+        nodes       (->> edges
+                         (mapcat (fn [[[f t] _]] [f t]))
+                         (into #{})
+                         sort
+                         (map-indexed (fn [i n] [n i]))
+                         (into {}))
+        in-deg      (frequencies (map (fn [[[_ t] _]] t) edges))
+        out-deg     (frequencies (map (fn [[[f _] _]] f) edges))
+        node-module (fn [label]
+                      (or (when module-fn (module-fn label)) "(unknown)"))
+        node-type   (fn [label]
+                      (let [cls (first (str/split label #"/"))]
+                        (cond
+                          (re-find #"Controller$" cls)          "Controller"
+                          (re-find #"ServiceImpl$" cls)         "ServiceImpl"
+                          (re-find #"Service$" cls)             "Service"
+                          (re-find #"(Mapper|Repository)$" cls) "Mapper"
+                          :else                                  "Other")))]
+    (str "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n"
+         "<graphml xmlns=\"http://graphml.graphdrawing.org/xmlns\">\n"
+         ;; ノード属性キー定義
+         ;; attr.name=\"name\" は Cytoscape がノードラベルとして自動認識する
+         "  <key id=\"name\"       for=\"node\" attr.name=\"name\"       attr.type=\"string\"/>\n"
+         "  <key id=\"in_degree\"  for=\"node\" attr.name=\"in_degree\"  attr.type=\"int\"/>\n"
+         "  <key id=\"out_degree\" for=\"node\" attr.name=\"out_degree\" attr.type=\"int\"/>\n"
+         "  <key id=\"module\"     for=\"node\" attr.name=\"module\"     attr.type=\"string\"/>\n"
+         "  <key id=\"type\"       for=\"node\" attr.name=\"type\"       attr.type=\"string\"/>\n"
+         ;; エッジ属性キー定義
+         "  <key id=\"weight\"     for=\"edge\" attr.name=\"weight\"     attr.type=\"int\"/>\n"
+         "  <graph id=\"G\" edgedefault=\"directed\">\n"
+         ;; ノード
+         (str/join
+          (map (fn [[label id]]
+                 (str "    <node id=\"n" id "\">\n"
+                      "      <data key=\"name\">"       (xml-escape label) "</data>\n"
+                      "      <data key=\"in_degree\">"  (get in-deg label 0) "</data>\n"
+                      "      <data key=\"out_degree\">" (get out-deg label 0) "</data>\n"
+                      "      <data key=\"module\">"     (xml-escape (node-module label)) "</data>\n"
+                      "      <data key=\"type\">"       (xml-escape (node-type label)) "</data>\n"
+                      "    </node>\n"))
+               nodes))
+         ;; エッジ
+         (str/join
+          (map-indexed (fn [i [[f t] w]]
+                         (str "    <edge id=\"e" i
+                              "\" source=\"n" (get nodes f)
+                              "\" target=\"n" (get nodes t) "\">\n"
+                              "      <data key=\"weight\">" w "</data>\n"
+                              "    </edge>\n"))
+                       edges))
+         "  </graph>\n"
+         "</graphml>\n")))

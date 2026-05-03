@@ -259,14 +259,10 @@
   (visualize/call-tree-str refs root))
 
 (defn export-gexf!
-  "refs を GEXF ファイルとして書き出す。Gephi / Cytoscape でインポート可能。
+  "refs を GEXF ファイルとして書き出す。Gephi でインポート可能。
 
    opts:
      :level - :method（デフォルト）or :class（クラス単位に集約）
-
-   ファイルサイズの目安:
-     :method 10万エッジ → 数十 MB
-     :class  1万クラス  → 数 MB（Gephi が快適）
 
    例:
      (export-gexf! (jrefs :trial \"tradehub\") \"tradehub.gexf\")
@@ -277,6 +273,71 @@
                 (count (slurp path))
                 " bytes)"))
   path)
+
+(defn export-graphml!
+  "refs を GraphML ファイルとして書き出す。Cytoscape でインポート可能。
+
+   opts:
+     :level     - :method（デフォルト）or :class（クラス単位に集約）
+     :module-fn - ラベル文字列 → モジュール名を返す関数
+
+   例:
+     (export-graphml! (jrefs :trial \"tradehub\") \"tradehub-class.graphml\" :level :class)
+     (export-graphml! (jrefs :trial \"tradehub\") \"tradehub-class.graphml\"
+                      :level :class :module-fn module-fn)"
+  [refs path & {:keys [level module-fn] :or {level :method}}]
+  (spit path (visualize/graphml refs :level level :module-fn module-fn))
+  (println (str "written → " path " ("
+                (count (slurp path))
+                " bytes)"))
+  path)
+
+(defn export-xgmml!
+  "refs を XGMML ファイルとして書き出す。Cytoscape のネイティブ形式で確実に読み込める。
+   GraphML で \"don't know how to read\" が出る場合はこちらを使う。
+
+   opts:
+     :level     - :method（デフォルト）or :class（クラス単位に集約）
+     :module-fn - ラベル文字列 → モジュール名を返す関数
+
+   例:
+     (export-xgmml! (jrefs :trial \"tradehub\") \"tradehub-class.xgmml\" :level :class)
+     (export-xgmml! (jrefs :trial \"tradehub\") \"tradehub-class.xgmml\"
+                    :level :class :module-fn module-fn)"
+  [refs path & {:keys [level module-fn] :or {level :method}}]
+  (spit path (visualize/xgmml refs :level level :module-fn module-fn))
+  (println (str "written → " path " ("
+                (count (slurp path))
+                " bytes)"))
+  path)
+
+(defn export-cytoscape-csv!
+  "refs を Cytoscape 向け CSV 2 枚（エッジリスト + ノード属性）として書き出す。
+   path は共通プレフィックス。-edges.csv / -nodes.csv が生成される。
+   XGMML/GraphML が読み込めない場合の最終手段。
+
+   Cytoscape での読み込み手順:
+     1. File → Import → Network from File → *-edges.csv
+        ダイアログで source=source, target=target
+     2. File → Import → Table from File → *-nodes.csv
+        Key Column = name（ノード名で属性を照合）
+
+   opts:
+     :level     - :method（デフォルト）or :class
+     :module-fn - ラベル文字列 → モジュール名を返す関数
+
+   例:
+     (export-cytoscape-csv! (jrefs :trial \"tradehub\") \"exports/tradehub-class\"
+                            :level :class :module-fn module-fn)"
+  [refs path-prefix & {:keys [level module-fn] :or {level :method}}]
+  (let [{:keys [edges nodes]} (visualize/cytoscape-csvs refs :level level :module-fn module-fn)
+        edges-path (str path-prefix "-edges.csv")
+        nodes-path (str path-prefix "-nodes.csv")]
+    (spit edges-path edges)
+    (spit nodes-path nodes)
+    (println (str "written → " edges-path " (" (count (slurp edges-path)) " bytes)"))
+    (println (str "written → " nodes-path " (" (count (slurp nodes-path)) " bytes)"))
+    path-prefix))
 
 ;; -------------------------
 ;; metrics

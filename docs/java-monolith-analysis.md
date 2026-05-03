@@ -146,14 +146,26 @@ neighborhood の結果から Java 標準クラス（`Collections`・`String` 等
 
 ---
 
-## フェーズ 6: GEXF エクスポートと Gephi 可視化
+## フェーズ 6: グラフエクスポートと可視化（Gephi / Cytoscape）
 
-静的依存グラフを GEXF に出力し、Gephi で対話的に可視化する。
+静的依存グラフを外部ビューアで可視化する。ツールによって形式を使い分ける：
+
+| ツール | 形式 | 向いている用途 |
+|--------|------|----------------|
+| **Gephi** | GEXF (`.gexf`) | 依存構造・クラスタ・全体レイアウト探索 |
+| **Cytoscape** | GraphML (`.graphml`) | 属性分析・Node Table フィルタ・詳細深掘り |
+
+どちらも同じ属性（`in_degree`/`out_degree`/`module`/`type`/エッジ `weight`）を持つ。  
+XTDB が中心で、両ツールは外部ビューアという位置づけ。
 
 ```clojure
-(core/export-gexf! rs "exports/my-project.gexf"
-                   :level :class
-                   :module-fn module-fn)
+;; Gephi 用
+(core/export-gexf! rs "exports/my-project-class.gexf"
+                   :level :class :module-fn module-fn)
+
+;; Cytoscape 用
+(core/export-graphml! rs "exports/my-project-class.graphml"
+                      :level :class :module-fn module-fn)
 ```
 
 ### パラメータ
@@ -261,6 +273,78 @@ GEXF の `viz:thickness` が自動反映される。手動調整：
 - **Data Laboratory**: ノード/エッジの生データを確認・ソート（`in_degree` 降順など）
 - **Filters パネル** → **Attributes → Equal** → `type = "Controller"` で特定種別を抽出
 - **Statistics パネル** → **Modularity** でクラスタ自動検出（結果は `modularity_class` attvalue として追加される）
+
+---
+
+### Cytoscape での操作手順
+
+Gephi の Data Laboratory（データ工房）操作が使いにくく感じる場合、Cytoscape の方が属性操作に向いている。  
+Gephi＝構造探索、Cytoscape＝属性分析 という使い分けが最適。
+
+#### 1. インポート
+
+1. **File → Import → Network from File** で `.graphml` を開く
+2. インポートダイアログ: **OK**（デフォルト設定で問題なし）
+
+#### 2. レイアウト
+
+| レイアウト | 用途 |
+|-----------|------|
+| **Layout → Prefuse Force Directed** | 依存クラスタを分離。最初にこれをかける |
+| **Layout → yFiles Organic** | yFiles 拡張インストール済みなら高品質 |
+| **Layout → Circular** | モジュール別に整列させてから力学レイアウトと組み合わせる |
+
+Prefuse Force Directed → **Settings**: `Default Spring Length` を 50〜100 に設定。
+
+#### 3. ノードサイズ → in_degree（Style → Mapping）
+
+1. **Style** パネル → **Node** タブ → **Size** 行
+2. 左端の列アイコン（**Continuous Mapping**）を選択
+3. **Column**: `in_degree` → **Mapping Type**: `Continuous Mapping`
+4. グラフエディタで min/max サイズを設定（例: 20〜100px）
+
+#### 4. ノード色 → type で種別色分け（Discrete Mapping）
+
+1. **Style** → **Node** → **Fill Color** 行
+2. **Discrete Mapping** → **Column**: `type`
+3. 各 `type` 値をダブルクリックして色を割り当てる
+
+推奨配色（Gephi と統一）：
+
+| type | 色 | 意味 |
+|------|----|------|
+| `Controller` | 赤 `#E74C3C` | HTTP エントリポイント |
+| `ServiceImpl` | 青 `#3498DB` | ビジネスロジック実装 |
+| `Service` | 水色 `#85C1E9` | インターフェース |
+| `Mapper` | 緑 `#2ECC71` | DB アクセス層 |
+| `Other` | グレー `#95A5A6` | その他 |
+
+#### 5. エッジ太さ → weight（Continuous Mapping）
+
+1. **Style** → **Edge** タブ → **Width** 行
+2. **Continuous Mapping** → **Column**: `weight`
+3. min/max の太さを設定（例: 1〜8px）
+
+#### 6. Node Table で属性分析（Gephi の Data Laboratory 相当）
+
+1. **Table Panel**（下部）→ **Node Table** タブ
+2. カラムヘッダをクリックして `in_degree` 降順ソート
+3. **Filter** バー: `type = "Controller"` で種別フィルタ
+4. セルをダブルクリックで直接編集も可能
+
+Node Table の操作性は Gephi の Data Laboratory より高い（Cytoscape の強み）。
+
+#### 7. モジュール境界の確認
+
+1. **Style** → **Fill Color** → **Discrete Mapping** → `module` を選択
+2. 同色ノード群が空間的にも集まっていれば凝集度が高い
+3. 異色ノードへのエッジが多いクラスが境界越え依存の候補
+
+#### 8. フィルタ（Select パネル）
+
+1. **Select** → **Filters** → **Column Filter**
+2. `type` = `Controller` で Controller クラスのみ選択
+3. **File → Export → Export Network as View** で選択範囲のみ書き出せる
 
 ---
 
