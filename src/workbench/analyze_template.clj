@@ -177,4 +177,56 @@
     (doseq [c nb-cls]
       (println (str "    " c)))))
 
+;; =============================================================================
+;; フェーズ 6: sqlref! — MyBatis @Select 等の SQL アノテーション解析
+;;
+;; :sql-refs テーブルに以下を格納する:
+;;   :sqlref/param-binds — col = #{param} 形式のバインディング
+;;   :sqlref/col-binds   — d.col = alias.col 形式の結合/CTE 縛り条件
+;;
+;; 利用シーン:
+;;   - SQL の WHERE 縛りを静的に把握して修正漏れを検出する
+;;   - :refs（呼び出しグラフ）と結合して「呼び出しチェーン上の SQL 縛り」を列挙する
+;; =============================================================================
+
+(println "\n--- sqlref! (MyBatis SQL アノテーション解析) ---")
+(let [n (core/sqlref! src-dirs :trial trial-name)]
+  (println (str "  sql-refs: " n)))
+
+;; =============================================================================
+;; フェーズ 7: refs × sql-refs — 呼び出しチェーン上の SQL 縛り列挙
+;;
+;; target-class から N ホップで到達できる Mapper メソッドのうち
+;; 特定の SQL 縛りパターンを持つものを抽出する。
+;;
+;; ★ 縛り検出パターン（プロジェクトに合わせて書き換える）
+;;   例: "source_process_id" — CTE の config_params.source_process_id との結合縛り
+;;   例: "process_id"        — 任意のプロセスID縛り
+;; =============================================================================
+
+(let [rs        (core/jrefs :trial trial-name :exclude-test true)
+      sqlrefs   (core/sqlrefs :trial trial-name)
+      sym->sql  (into {} (map (juxt :sqlref/symbol identity) sqlrefs))
+      cls-of    (fn [sym] (first (str/split sym #"/")))
+      ;; target-class から2ホップで到達できるシンボルセット
+      dep1      (->> rs (filter #(= (cls-of (:from %)) target-class)) (map :to) (into #{}))
+      dep2      (->> rs (filter #(dep1 (:from %)))                     (map :to) (into #{}))
+      reach     (into dep1 dep2)
+      ;; ★ ここでフィルタするキーワードを設定する
+      bind-pat  #"source_process_id"  ; ← プロジェクトに合わせて変更
+      hits      (->> reach
+                     (keep #(sym->sql %))
+                     (filter (fn [r]
+                               (some #(re-find bind-pat (str (:lhs %) (:rhs %)))
+                                     (:sqlref/col-binds r))))
+                     (sort-by :sqlref/symbol))]
+  (println (format "\n--- refs × sql-refs: %s の 2ホップ圏内で \"%s\" 縛りを持つ Mapper ---"
+                   target-class (str bind-pat)))
+  (println (format "  該当: %d 件" (count hits)))
+  (doseq [r hits]
+    (println (str "  " (:sqlref/symbol r)))
+    (doseq [b (filter #(re-find bind-pat (str (:lhs %) (:rhs %)))
+                      (:sqlref/col-binds r))]
+      (println (str "      " (:lhs b) " = " (:rhs b))))))
+
 (core/stop!)
