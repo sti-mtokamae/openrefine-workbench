@@ -16,7 +16,8 @@
   (:import
    [com.github.javaparser StaticJavaParser ParserConfiguration$LanguageLevel]
    [com.github.javaparser.ast.expr
-    SingleMemberAnnotationExpr StringLiteralExpr TextBlockLiteralExpr]
+    SingleMemberAnnotationExpr StringLiteralExpr TextBlockLiteralExpr
+    ArrayInitializerExpr]
    [com.github.javaparser.ast.body
     MethodDeclaration ClassOrInterfaceDeclaration Parameter]))
 
@@ -31,17 +32,28 @@
 (def ^:private sql-annotation-names
   #{"Select" "Insert" "Update" "Delete"})
 
+(defn- literal->str
+  "StringLiteralExpr または TextBlockLiteralExpr を文字列に変換する。
+   それ以外は nil を返す。"
+  [v]
+  (cond
+    (instance? TextBlockLiteralExpr v) (.asString ^TextBlockLiteralExpr v)
+    (instance? StringLiteralExpr v)    (.asString ^StringLiteralExpr v)))
+
 (defn- annotation-sql
   "MyBatis SQL アノテーションから SQL 文字列を取り出す。
-   テキストブロック（Java 13+）と通常文字列リテラルに対応。"
+   単一文字列・テキストブロック・配列形式（{\"...\", \"...\"}）に対応。"
   [^com.github.javaparser.ast.expr.AnnotationExpr ann]
   (when (instance? SingleMemberAnnotationExpr ann)
     (let [val (.getMemberValue ^SingleMemberAnnotationExpr ann)]
       (cond
-        (instance? TextBlockLiteralExpr val)
-        (.asString ^TextBlockLiteralExpr val)
-        (instance? StringLiteralExpr val)
-        (.asString ^StringLiteralExpr val)))))
+        (instance? ArrayInitializerExpr val)
+        (->> (.getValues ^ArrayInitializerExpr val)
+             (keep literal->str)
+             (str/join " "))
+        :else
+        (literal->str val)))))
+
 
 ;; -------------------------
 ;; SQL 条件抽出（正規表現ベース）
