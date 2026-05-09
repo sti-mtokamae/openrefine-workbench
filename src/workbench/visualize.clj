@@ -99,6 +99,191 @@
   ;; analyze.clj の export-gexf! が :module キーを渡した場合はそちらを優先する
   "(unknown)")
 
+(defn- gexf-both
+  "refs を GEXF 1.3 形式に変換する（:level :both 用）。
+   クラスノード（node_level=\"class\"）とメソッドノード（node_level=\"method\"）を
+   同一グラフに混在させ、contains エッジ（クラス→メソッド）と
+   calls エッジ（メソッド→メソッド）を出力する。"
+  [refs module-fn]
+  (let [today        (.format (LocalDate/now) DateTimeFormatter/ISO_LOCAL_DATE)
+        ;; メソッドレベルの calls エッジ: [from to] → weight
+        call-counts  (->> refs
+                          (map (fn [{:keys [from to]}] [from to]))
+                          (remove (fn [[f t]] (= f t)))
+                          frequencies)
+        call-edges   (seq call-counts)
+        ;; 全メソッドノード（ソート済み）
+        all-methods  (->> call-edges
+                          (mapcat (fn [[[f t] _]] [f t]))
+                          (into #{})
+                          sort)
+        ;; 全クラスノード（ソート済み）
+        all-classes  (->> all-methods
+                          (map #(first (str/split % #"/")))
+                          (into #{})
+                          sort)
+        ;; ID マップ: method → "m{i}", class → "c{i}"
+        mth-ids      (into {} (map-indexed (fn [i m] [m (str "m" i)]) all-methods))
+        cls-ids      (into {} (map-indexed (fn [i c] [c (str "c" i)]) all-classes))
+        ;; contains エッジ: class → method (重複なし)
+        contains-edges (for [m all-methods
+                             :let [c (first (str/split m #"/"))]]
+                         [c m])
+        ;; in/out degree（calls エッジのみ）
+        mth-in-deg   (frequencies (map (fn [[[_ t] _]] t) call-edges))
+        mth-out-deg  (frequencies (map (fn [[[f _] _]] f) call-edges))
+        ;; クラスの in/out = 配下メソッドの合計
+        cls-in-deg   (reduce (fn [acc mth]
+                               (update acc (first (str/split mth #"/"))
+                                       (fnil + 0) (get mth-in-deg mth 0)))
+                             {} all-methods)
+        cls-out-deg  (reduce (fn [acc mth]
+                               (update acc (first (str/split mth #"/"))
+                                       (fnil + 0) (get mth-out-deg mth 0)))
+                             {} all-methods)
+        max-mth-in   (apply max 1 (vals (merge {::_ 1} mth-in-deg)))
+        max-cls-in   (apply max 1 (vals (merge {::_ 1} cls-in-deg)))
+        max-mth-out  (apply max 1 (vals (merge {::_ 1} mth-out-deg)))
+        max-cls-out  (apply max 1 (vals (merge {::_ 1} cls-out-deg)))
+        max-weight   (apply max 1 (vals (merge {::_ 1} call-counts)))
+        node-module  (fn [label]
+                       (let [cls (first (str/split label #"/"))]
+                         (or (when module-fn (module-fn cls)) "(unknown)")))
+        node-type    (fn [label]
+                       (let [cls (first (str/split label #"/"))]
+                         (cond
+                           (re-find #"Controller$" cls)          "Controller"
+                           (re-find #"ServiceImpl$" cls)         "ServiceImpl"
+                           (re-find #"Service$" cls)             "Service"
+                           (re-find #"(Mapper|Repository)$" cls) "Mapper"
+                           :else                                  "Other")))
+        node-shape   (fn [label]
+                       (case (node-type label)
+                         "Controller" "diamond"
+                         "ServiceImpl" "square"
+                         "Service"     "square"
+                         "Mapper"      "triangle"
+                         "disc"))
+        size-fn      (fn [d max-d] (+ 4.0 (* 56.0 (/ d max-d))))
+        color-fn     (fn [d max-d]
+                       (let [t (/ d max-d)
+                             r (int (+ 50  (* t 205)))
+                             g (int (- 200 (* t 170)))]
+                         [r g 50]))]
+    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         "<gexf xmlns=\"http://gexf.net/1.3\"\n"
+         "      xmlns:viz=\"http://gexf.net/1.3/viz\"\n"
+         "      version=\"1.3\">\n"
+         "  <meta lastmodifieddate=\"" today "\">\n"
+         "    <creator>openrefine-workbench</creator>\n"
+         "  </meta>\n"
+         "  <graph defaultedgetype=\"directed\">\n"
+         ;; ノード属性定義（既存 0-5 + 6=node_level）
+         "    <attributes class=\"node\">\n"
+         "      <attribute id=\"0\" title=\"in_degree\"  type=\"integer\"/>\n"
+         "      <attribute id=\"1\" title=\"out_degree\" type=\"integer\"/>\n"
+         "      <attribute id=\"2\" title=\"module\"     type=\"string\"/>\n"
+         "      <attribute id=\"3\" title=\"type\"       type=\"string\"/>\n"
+         "      <attribute id=\"4\" title=\"class\"      type=\"string\"/>\n"
+         "      <attribute id=\"5\" title=\"method\"     type=\"string\"/>\n"
+         "      <attribute id=\"6\" title=\"node_level\" type=\"string\"/>\n"
+         "      <attribute id=\"7\" title=\"name\"       type=\"string\"/>\n"
+         "    </attributes>\n"
+         ;; エッジ属性定義（edge_type: contains | calls）
+         "    <attributes class=\"edge\">\n"
+         "      <attribute id=\"0\" title=\"edge_type\"  type=\"string\"/>\n"
+         "    </attributes>\n"
+         "    <nodes>\n"
+         ;; クラスノード
+         (str/join
+          (map (fn [cls]
+                 (let [ind     (get cls-in-deg cls 0)
+                       outd    (get cls-out-deg cls 0)
+                       sz      (size-fn ind max-cls-in)
+                       [r g b] (color-fn outd max-cls-out)
+                       mod     (node-module cls)
+                       typ     (node-type cls)
+                       shp     (node-shape cls)]
+                   (str "      <node id=\"" (get cls-ids cls)
+                        "\" label=\"" (xml-escape (str cls ".")) "\">\n"
+                        "        <attvalues>\n"
+                        "          <attvalue for=\"0\" value=\"" ind "\"/>\n"
+                        "          <attvalue for=\"1\" value=\"" outd "\"/>\n"
+                        "          <attvalue for=\"2\" value=\"" (xml-escape mod) "\"/>\n"
+                        "          <attvalue for=\"3\" value=\"" (xml-escape typ) "\"/>\n"
+                        "          <attvalue for=\"4\" value=\"" (xml-escape cls) "\"/>\n"
+                        "          <attvalue for=\"5\" value=\"\"/>\n"
+                        "          <attvalue for=\"6\" value=\"class\"/>\n"
+                        "          <attvalue for=\"7\" value=\"" (xml-escape cls) "\"/>\n"
+                        "        </attvalues>\n"
+                        "        <viz:size value=\"" (format "%.1f" sz) "\"/>\n"
+                        "        <viz:color r=\"" r "\" g=\"" g "\" b=\"" b "\"/>\n"
+                        "        <viz:shape value=\"" shp "\"/>\n"
+                        "      </node>\n")))
+               all-classes))
+         ;; メソッドノード
+         (str/join
+          (map (fn [mth]
+                 (let [parts   (str/split mth #"/")
+                       cls-v   (first parts)
+                       mth-v   (if (> (count parts) 1) (second parts) "")
+                       ind     (get mth-in-deg mth 0)
+                       outd    (get mth-out-deg mth 0)
+                       sz      (size-fn ind max-mth-in)
+                       [r g b] (color-fn outd max-mth-out)
+                       mod     (node-module mth)
+                       typ     (node-type mth)
+                       shp     (node-shape mth)]
+                   (str "      <node id=\"" (get mth-ids mth)
+                        "\" label=\"" (xml-escape (str "." mth-v)) "\">\n"
+                        "        <attvalues>\n"
+                        "          <attvalue for=\"0\" value=\"" ind "\"/>\n"
+                        "          <attvalue for=\"1\" value=\"" outd "\"/>\n"
+                        "          <attvalue for=\"2\" value=\"" (xml-escape mod) "\"/>\n"
+                        "          <attvalue for=\"3\" value=\"" (xml-escape typ) "\"/>\n"
+                        "          <attvalue for=\"4\" value=\"" (xml-escape cls-v) "\"/>\n"
+                        "          <attvalue for=\"5\" value=\"" (xml-escape mth-v) "\"/>\n"
+                        "          <attvalue for=\"6\" value=\"method\"/>\n"
+                        "          <attvalue for=\"7\" value=\"" (xml-escape mth) "\"/>\n"
+                        "        </attvalues>\n"
+                        "        <viz:size value=\"" (format "%.1f" sz) "\"/>\n"
+                        "        <viz:color r=\"" r "\" g=\"" g "\" b=\"" b "\"/>\n"
+                        "        <viz:shape value=\"" shp "\"/>\n"
+                        "      </node>\n")))
+               all-methods))
+         "    </nodes>\n"
+         "    <edges>\n"
+         ;; contains エッジ（クラス→メソッド）
+         (str/join
+          (map-indexed (fn [i [c m]]
+                         (str "      <edge id=\"cnt" i
+                              "\" source=\"" (get cls-ids c)
+                              "\" target=\"" (get mth-ids m) "\">\n"
+                              "        <attvalues>\n"
+                              "          <attvalue for=\"0\" value=\"contains\"/>\n"
+                              "        </attvalues>\n"
+                              "      </edge>\n"))
+                       contains-edges))
+         ;; calls エッジ（メソッド→メソッド）
+         (str/join
+          (map-indexed (fn [i [[f t] w]]
+                         (str "      <edge id=\"call" i
+                              "\" source=\"" (get mth-ids f)
+                              "\" target=\"" (get mth-ids t)
+                              "\" weight=\"" w "\">\n"
+                              "        <attvalues>\n"
+                              "          <attvalue for=\"0\" value=\"calls\"/>\n"
+                              "        </attvalues>\n"
+                              "        <viz:thickness value=\""
+                              (format "%.1f" (+ 1.0 (* 7.0 (/ w max-weight))))
+                              "\"/>\n"
+                              "      </edge>\n"))
+                       call-edges))
+         "    </edges>\n"
+         "  </graph>\n"
+         "</gexf>\n")))
+
+
 (defn gexf
   "refs を GEXF 1.3 形式の文字列に変換する。Gephi / Cytoscape でインポート可能。
 
@@ -125,7 +310,9 @@
                            :level :class
                            :module-fn #(get mod-map %)))"
   [refs & {:keys [level module-fn] :or {level :method}}]
-  (let [normalize   (if (= level :class)
+  (if (= level :both)
+    (gexf-both refs module-fn)
+    (let [normalize   (if (= level :class)
                       (fn [s] (first (str/split s #"/")))
                       identity)
         ;; [from to] → 出現回数（weight）
@@ -163,7 +350,8 @@
                         [r g b]))
         ;; モジュール名（module-fn が nil なら "(unknown)"）
         node-module (fn [label]
-                      (or (when module-fn (module-fn label)) "(unknown)"))
+                      (let [cls (first (str/split label #"/"))]
+                        (or (when module-fn (module-fn cls)) "(unknown)")))
         ;; クラス種別 → viz:shape + type 属性
         ;; :method レベルは "ClassName/method" なので先頭クラス部分で判定
         node-type   (fn [label]
@@ -199,6 +387,8 @@
          "      <attribute id=\"1\" title=\"out_degree\" type=\"integer\"/>\n"
          "      <attribute id=\"2\" title=\"module\"     type=\"string\"/>\n"
          "      <attribute id=\"3\" title=\"type\"       type=\"string\"/>\n"
+         "      <attribute id=\"4\" title=\"class\"      type=\"string\"/>\n"
+         "      <attribute id=\"5\" title=\"method\"     type=\"string\"/>\n"
          "    </attributes>\n"
          "    <nodes>\n"
          (str/join
@@ -209,7 +399,10 @@
                        outd    (get out-deg label 0)
                        mod     (node-module label)
                        typ     (node-type label)
-                       shp     (node-shape label)]
+                       shp     (node-shape label)
+                       parts   (str/split label #"/")
+                       cls-v   (first parts)
+                       mth-v   (if (> (count parts) 1) (second parts) "")]
                    (str "      <node id=\"" id
                         "\" label=\"" (xml-escape label) "\">\n"
                         "        <attvalues>\n"
@@ -217,6 +410,8 @@
                         "          <attvalue for=\"1\" value=\"" outd "\"/>\n"
                         "          <attvalue for=\"2\" value=\"" (xml-escape mod) "\"/>\n"
                         "          <attvalue for=\"3\" value=\"" (xml-escape typ) "\"/>\n"
+                        "          <attvalue for=\"4\" value=\"" (xml-escape cls-v) "\"/>\n"
+                        "          <attvalue for=\"5\" value=\"" (xml-escape mth-v) "\"/>\n"
                         "        </attvalues>\n"
                         "        <viz:size value=\"" (format "%.1f" sz) "\"/>\n"
                         "        <viz:color r=\"" r "\" g=\"" g "\" b=\"" b "\"/>\n"
@@ -236,83 +431,7 @@
                        edges))
          "    </edges>\n"
          "  </graph>\n"
-         "</gexf>\n")))
-
-;; -------------------------
-;; XGMML export (Cytoscape ネイティブ形式)
-;; -------------------------
-
-(defn xgmml
-  "refs を XGMML 形式の文字列に変換する。Cytoscape のネイティブ XML 形式。
-   GraphML より確実に読み込める。
-
-   opts:
-     :level      - :method（デフォルト）or :class
-     :module-fn  - ラベル文字列 → モジュール名文字列を返す関数
-
-   Cytoscape での属性利用:
-     in_degree / out_degree → Style → Mapping（size / color）
-     module / type          → Style → Mapping（fill color partition）
-     weight（edge）         → Style → Mapping（width）
-
-   例:
-     (spit \"graph.xgmml\"
-           (visualize/xgmml (core/jrefs :trial \"tradehub\")
-                            :level :class
-                            :module-fn #(get mod-map %)))"
-  [refs & {:keys [level module-fn] :or {level :method}}]
-  (let [normalize   (if (= level :class)
-                      (fn [s] (first (str/split s #"/")))
-                      identity)
-        edge-counts (->> refs
-                         (map (fn [{:keys [from to]}]
-                                [(normalize from) (normalize to)]))
-                         (remove (fn [[f t]] (= f t)))
-                         frequencies)
-        edges       (seq edge-counts)
-        nodes       (->> edges
-                         (mapcat (fn [[[f t] _]] [f t]))
-                         (into #{})
-                         sort
-                         (map-indexed (fn [i n] [n (inc i)]))  ; ID は 1 始まり
-                         (into {}))
-        in-deg      (frequencies (map (fn [[[_ t] _]] t) edges))
-        out-deg     (frequencies (map (fn [[[f _] _]] f) edges))
-        node-module (fn [label]
-                      (or (when module-fn (module-fn label)) "(unknown)"))
-        node-type   (fn [label]
-                      (let [cls (first (str/split label #"/"))]
-                        (cond
-                          (re-find #"Controller$" cls)          "Controller"
-                          (re-find #"ServiceImpl$" cls)         "ServiceImpl"
-                          (re-find #"Service$" cls)             "Service"
-                          (re-find #"(Mapper|Repository)$" cls) "Mapper"
-                          :else                                  "Other")))]
-    (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-         "<graph label=\"graph\"\n"
-         "  xmlns=\"http://www.cs.rpi.edu/XGMML\"\n"
-         "  directed=\"1\">\n"
-         ;; ノード
-         (str/join
-          (map (fn [[label id]]
-                 (str "  <node id=\"" id
-                      "\" label=\"" (xml-escape label) "\">\n"
-                      "    <att name=\"in_degree\"  type=\"integer\" value=\"" (get in-deg label 0) "\"/>\n"
-                      "    <att name=\"out_degree\" type=\"integer\" value=\"" (get out-deg label 0) "\"/>\n"
-                      "    <att name=\"module\"     type=\"string\"  value=\"" (xml-escape (node-module label)) "\"/>\n"
-                      "    <att name=\"type\"       type=\"string\"  value=\"" (xml-escape (node-type label)) "\"/>\n"
-                      "  </node>\n"))
-               nodes))
-         ;; エッジ
-         (str/join
-          (map-indexed (fn [i [[f t] w]]
-                         (str "  <edge id=\"" (inc i)
-                              "\" source=\"" (get nodes f)
-                              "\" target=\"" (get nodes t) "\">\n"
-                              "    <att name=\"weight\" type=\"integer\" value=\"" w "\"/>\n"
-                              "  </edge>\n"))
-                       edges))
-         "</graph>\n")))
+         "</gexf>\n"))))
 
 ;; -------------------------
 ;; CSV export (Cytoscape: エッジリスト + ノード属性テーブル)
@@ -348,7 +467,8 @@
         in-deg      (frequencies (map (fn [[[_ t] _]] t) edges))
         out-deg     (frequencies (map (fn [[[f _] _]] f) edges))
         node-module (fn [label]
-                      (or (when module-fn (module-fn label)) "(unknown)"))
+                      (let [cls (first (str/split label #"/"))]
+                        (or (when module-fn (module-fn cls)) "(unknown)")))
         node-type   (fn [label]
                       (let [cls (first (str/split label #"/"))]
                         (cond
@@ -419,7 +539,8 @@
         in-deg      (frequencies (map (fn [[[_ t] _]] t) edges))
         out-deg     (frequencies (map (fn [[[f _] _]] f) edges))
         node-module (fn [label]
-                      (or (when module-fn (module-fn label)) "(unknown)"))
+                      (let [cls (first (str/split label #"/"))]
+                        (or (when module-fn (module-fn cls)) "(unknown)")))
         node-type   (fn [label]
                       (let [cls (first (str/split label #"/"))]
                         (cond
@@ -433,6 +554,8 @@
          ;; ノード属性キー定義
          ;; attr.name=\"name\" は Cytoscape がノードラベルとして自動認識する
          "  <key id=\"name\"       for=\"node\" attr.name=\"name\"       attr.type=\"string\"/>\n"
+         "  <key id=\"class\"      for=\"node\" attr.name=\"class\"      attr.type=\"string\"/>\n"
+         "  <key id=\"method\"     for=\"node\" attr.name=\"method\"     attr.type=\"string\"/>\n"
          "  <key id=\"in_degree\"  for=\"node\" attr.name=\"in_degree\"  attr.type=\"int\"/>\n"
          "  <key id=\"out_degree\" for=\"node\" attr.name=\"out_degree\" attr.type=\"int\"/>\n"
          "  <key id=\"module\"     for=\"node\" attr.name=\"module\"     attr.type=\"string\"/>\n"
@@ -443,13 +566,18 @@
          ;; ノード
          (str/join
           (map (fn [[label id]]
-                 (str "    <node id=\"n" id "\">\n"
-                      "      <data key=\"name\">"       (xml-escape label) "</data>\n"
-                      "      <data key=\"in_degree\">"  (get in-deg label 0) "</data>\n"
-                      "      <data key=\"out_degree\">" (get out-deg label 0) "</data>\n"
-                      "      <data key=\"module\">"     (xml-escape (node-module label)) "</data>\n"
-                      "      <data key=\"type\">"       (xml-escape (node-type label)) "</data>\n"
-                      "    </node>\n"))
+                 (let [parts (str/split label #"/")
+                       cls-v (first parts)
+                       mth-v (if (> (count parts) 1) (second parts) "")]
+                   (str "    <node id=\"n" id "\">\n"
+                        "      <data key=\"name\">"       (xml-escape label) "</data>\n"
+                        "      <data key=\"class\">"      (xml-escape cls-v) "</data>\n"
+                        "      <data key=\"method\">"     (xml-escape mth-v) "</data>\n"
+                        "      <data key=\"in_degree\">"  (get in-deg label 0) "</data>\n"
+                        "      <data key=\"out_degree\">" (get out-deg label 0) "</data>\n"
+                        "      <data key=\"module\">"     (xml-escape (node-module label)) "</data>\n"
+                        "      <data key=\"type\">"       (xml-escape (node-type label)) "</data>\n"
+                        "    </node>\n")))
                nodes))
          ;; エッジ
          (str/join

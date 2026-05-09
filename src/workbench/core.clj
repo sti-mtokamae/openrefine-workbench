@@ -262,11 +262,14 @@
   "refs を GEXF ファイルとして書き出す。Gephi でインポート可能。
 
    opts:
-     :level - :method（デフォルト）or :class（クラス単位に集約）
+     :level - :method（デフォルト）
+              :class（クラス単位に集約）
+              :both（クラスノード + メソッドノード混在。contains/calls エッジあり）
 
    例:
      (export-gexf! (jrefs :trial \"tradehub\") \"tradehub.gexf\")
-     (export-gexf! (jrefs :trial \"tradehub\") \"tradehub-class.gexf\" :level :class)"
+     (export-gexf! (jrefs :trial \"tradehub\") \"tradehub-class.gexf\" :level :class)
+     (export-gexf! (jrefs :trial \"tradehub\") \"tradehub-both.gexf\"  :level :both)"
   [refs path & {:keys [level module-fn] :or {level :method}}]
   (spit path (visualize/gexf refs :level level :module-fn module-fn))
   (println (str "written → " path " ("
@@ -292,29 +295,10 @@
                 " bytes)"))
   path)
 
-(defn export-xgmml!
-  "refs を XGMML ファイルとして書き出す。Cytoscape のネイティブ形式で確実に読み込める。
-   GraphML で \"don't know how to read\" が出る場合はこちらを使う。
-
-   opts:
-     :level     - :method（デフォルト）or :class（クラス単位に集約）
-     :module-fn - ラベル文字列 → モジュール名を返す関数
-
-   例:
-     (export-xgmml! (jrefs :trial \"tradehub\") \"tradehub-class.xgmml\" :level :class)
-     (export-xgmml! (jrefs :trial \"tradehub\") \"tradehub-class.xgmml\"
-                    :level :class :module-fn module-fn)"
-  [refs path & {:keys [level module-fn] :or {level :method}}]
-  (spit path (visualize/xgmml refs :level level :module-fn module-fn))
-  (println (str "written → " path " ("
-                (count (slurp path))
-                " bytes)"))
-  path)
-
 (defn export-cytoscape-csv!
   "refs を Cytoscape 向け CSV 2 枚（エッジリスト + ノード属性）として書き出す。
    path は共通プレフィックス。-edges.csv / -nodes.csv が生成される。
-   XGMML/GraphML が読み込めない場合の最終手段。
+   GraphML が読み込めない場合の最終手段。
 
    Cytoscape での読み込み手順:
      1. File → Import → Network from File → *-edges.csv
