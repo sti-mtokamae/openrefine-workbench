@@ -13,8 +13,7 @@
    [clojure.string      :as str]
    [workbench.ingest    :as ingest]
    [workbench.jref      :as jref]
-   [workbench.query     :as query]
-   [workbench.visualize :as visualize]
+   [workbench.query     :as query]   [workbench.sqlref    :as sqlref]   [workbench.visualize :as visualize]
    [xtdb.node           :as xtn]))
 
 ;; -------------------------
@@ -95,6 +94,29 @@
      (jref! [\"src/main/java\"] :trial \"aca-spring\")"
   [paths & {:keys [trial]}]
   (jref/jref! (node) paths :trial trial))
+
+(defn sqlref!
+  "Java ソースの MyBatis @Select 等アノテーション SQL を解析して
+   XTDB :sql-refs テーブルに取り込む。
+
+   opts:
+     :trial - トライアル識別子
+
+   例:
+     (sqlref! [\"trials/experiments/2026-04-28-tradehub/repo/common-lib\"]
+              :trial \"tradehub\")"
+  [paths & {:keys [trial]}]
+  (sqlref/sqlref! (node) paths :trial trial))
+
+(defn sqlrefs
+  "XTDB :sql-refs テーブルから全レコードを返す。
+   opts:
+     :trial - トライアル識別子でフィルタ
+
+   例:
+     (sqlrefs :trial \"tradehub\")"
+  [& {:keys [trial]}]
+  (sqlref/sqlrefs (node) :trial trial))
 ;; -------------------------
 ;; query
 ;; -------------------------
