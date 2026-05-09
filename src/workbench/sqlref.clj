@@ -18,7 +18,7 @@
    [com.github.javaparser.ast.expr
     SingleMemberAnnotationExpr StringLiteralExpr TextBlockLiteralExpr]
    [com.github.javaparser.ast.body
-    MethodDeclaration ClassOrInterfaceDeclaration]))
+    MethodDeclaration ClassOrInterfaceDeclaration Parameter]))
 
 ;; Java 21 の言語機能（テキストブロック・Record・switch 式）を有効化
 (.setLanguageLevel (StaticJavaParser/getParserConfiguration)
@@ -65,6 +65,37 @@
          (map (fn [[_ lhs rhs]] {:lhs lhs :rhs rhs})))))
 
 ;; -------------------------
+;; @Param アノテーション解析
+;; -------------------------
+
+(defn- extract-param-map
+  "メソッドパラメータの @Param アノテーションから {\"param-name\" \"JavaType\"} マップを返す。
+   例: {\"context\" \"AggregateSourceDataContext\"}"
+  [^MethodDeclaration mth]
+  (->> (.getParameters mth)
+       (keep (fn [^Parameter param]
+               (let [param-ann (->> (.getAnnotations param)
+                                    (filter #(= "Param" (.getNameAsString %)))
+                                    first)]
+                 (when (instance? SingleMemberAnnotationExpr param-ann)
+                   (let [val (.getMemberValue ^SingleMemberAnnotationExpr param-ann)]
+                     (when (instance? StringLiteralExpr val)
+       [(str/replace (str/trim (.asString ^StringLiteralExpr val)) #"^:" "")
+                        (.getTypeAsString param)]))))))
+       (into {})))
+
+(defn- enrich-param-binds
+  "param-binds の :param プレフィクスを @Param マップで解決して :param-type を付与する。
+   例: {:col \"work_process_id\" :param \"context.targetProcessId\" :param-type \"AggregateSourceDataContext\"}"
+  [binds param-map]
+  (mapv (fn [{:keys [param] :as b}]
+          (let [prefix (first (str/split param #"\."))]
+            (if-let [typ (get param-map prefix)]
+              (assoc b :param-type typ)
+              b)))
+        binds))
+
+;; -------------------------
 ;; ファイルレベル解析
 ;; -------------------------
 
@@ -94,15 +125,19 @@
                                           (filter #(sql-annotation-names (.getNameAsString %)))
                                           first)]
                        (when-let [sql (some-> sql-ann annotation-sql)]
-                         (let [id-prefix (if trial (str trial "::") "")
-                               sym       (str cls-name "/" mth-name)]
+                         (let [id-prefix   (if trial (str trial "::") "")
+                               sym         (str cls-name "/" mth-name)
+                               param-map   (extract-param-map mth)
+                               raw-binds   (extract-param-binds sql)
+                               param-binds (enrich-param-binds raw-binds param-map)]
                            {:xt/id              (str id-prefix sym)
                             :sqlref/trial       trial
                             :sqlref/class       cls-name
                             :sqlref/method      mth-name
                             :sqlref/symbol      sym
                             :sqlref/file        rel
-                            :sqlref/param-binds (extract-param-binds sql)
+                            :sqlref/param-map   (when (seq param-map) param-map)
+                            :sqlref/param-binds param-binds
                             :sqlref/col-binds   (extract-col-binds sql)}))))))))
          classes))
       (catch Exception e
