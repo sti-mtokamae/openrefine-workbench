@@ -41,8 +41,8 @@
      (reset! state
        (xtn/start-node
          (if persist?
-           {:log         [:local {:path (str db-path "/log")}]
-            :index-store [:local {:path (str db-path "/index-store")}]}
+           {:log     [:local {:path (str db-path "/log")}]
+            :storage [:local {:path (str db-path "/storage")}]}
            {})))
      ;; ログが存在する場合はリプレイ完了を待機する
      (let [log-file (java.io.File. (str db-path "/log/LOG"))]
@@ -661,31 +661,28 @@
          (sql-cochange-check :trial \"tradehub\"))"
   [{:keys [mappers all-classes] :as report}
    & {:keys [trial min-count] :or {min-count 1}}]
-  (let [;; class → file パスの逆引きマップ（refs の :ref/file から構築）
-        cls->file (->> (q '(from :refs [{:ref/from from :ref/file file :ref/trial t}]))
-                       (filter #(or (nil? trial) (= trial (:t %))))
-                       (map (fn [{:keys [from file]}]
-                              [(first (str/split from #"/")) file]))
-                       (into {}))
-        ;; cochange ペアを (file-a × file-b) の双方向セットに
-        cc-pairs  (->> (cochanges :trial trial :min-count min-count)
+  (let [;; cochange ペアを [ClassName-a ClassName-b] → max-count で索引化
+        ;; :cc/a / :cc/b は git log の repo 相対パス ("common-app/.../Foo.java") なので
+        ;; ファイル名のステム（= クラス名）で正規化してマッチングする
+        path->cls (fn [path]
+                    (-> path
+                        (str/replace #".*/" "")         ; ディレクトリ除去
+                        (str/replace #"\.java$" "")))   ; 拡張子除去
+        cc-by-cls (->> (cochanges :trial trial :min-count min-count)
                        (reduce (fn [m {:keys [a b cnt]}]
-                                 (-> m
-                                     (update [a b] (fnil max 0) cnt)
-                                     (update [b a] (fnil max 0) cnt)))
+                                 (let [ca (path->cls a)
+                                       cb (path->cls b)]
+                                   (-> m
+                                       (update [ca cb] (fnil max 0) cnt)
+                                       (update [cb ca] (fnil max 0) cnt))))
                                {}))
-        cc-cnt    (fn [file-a file-b]
-                    (or (get cc-pairs [file-a file-b]) 0))
+        cc-cnt    (fn [cls-a cls-b]
+                    (or (get cc-by-cls [cls-a cls-b]) 0))
         enrich-upstream
         (fn [mapper-sym upstream]
-          (let [mapper-cls  (first (str/split mapper-sym #"/"))
-                mapper-file (get cls->file mapper-cls)]
+          (let [mapper-cls (first (str/split mapper-sym #"/"))]
             (mapv (fn [{:keys [class] :as u}]
-                    (let [cls-file (get cls->file class)
-                          cnt      (if (and mapper-file cls-file)
-                                     (cc-cnt mapper-file cls-file)
-                                     0)]
-                      (assoc u :cochange-cnt cnt)))
+                    (assoc u :cochange-cnt (cc-cnt mapper-cls class)))
                   upstream)))
         new-mappers
         (mapv (fn [{:keys [mapper-sym upstream] :as m}]
@@ -695,7 +692,7 @@
         (let [cls->cnt (->> new-mappers
                             (mapcat :upstream)
                             (group-by :class)
-                            (map (fn [[cls xs]] [cls (apply max (map :cochange-cnt xs))]))
+                            (map (fn [[cls xs]] [cls (apply max (map #(or (:cochange-cnt %) 0) xs))]))
                             (into {}))]
           (mapv (fn [cls-entry]
                   (assoc cls-entry :cochange-cnt (get cls->cnt (:class cls-entry) 0)))
