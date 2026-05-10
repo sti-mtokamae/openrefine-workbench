@@ -499,34 +499,48 @@
   "SQL 縛りパターンにマッチする Mapper メソッドを起点に
    :refs を逆向きたどって影響を受ける全上流シンボルを返す。
 
-   bind-pat: col-binds の :lhs/:rhs に対してマッチする正規表現
+   bind-pat: バインド条件に対してマッチする正規表現
    opts:
      :trial  - トライアル識別子
      :depth  - 上流探索深さ（デフォルト Integer/MAX_VALUE = 全上流）
      :rs     - 対象 refs（デフォルト (jrefs :trial trial :exclude-test true)）
-     :side   - :lhs :rhs :any のいずれか（デフォルト :any）
+     :side   - col-binds 検索時の対象サイド: :lhs :rhs :any（デフォルト :any）
+     :source - 検索対象の bind 種別:
+               :col-binds   (デフォルト) JOIN 縛り（table.col = alias.col 形式）
+               :param-binds WHERE 絞り込み（col = #{param} 形式。:col に対してマッチ）
+               :any         両方
 
    戻り値: [{:mapper-sym \"...\"  ; マッチした Mapper メソッド
-             :col-binds [...]    ; マッチした縛り条件
+             :col-binds [...]    ; マッチした col-binds（:source に :col-binds が含まれる場合）
+             :param-binds [...]  ; マッチした param-binds（:source に :param-binds が含まれる場合）
              :upstream #{...}}]  ; 上流シンボル集合
 
    例:
-     (sql-impact #\"source_process_id\" :trial \"tradehub\")"
-  [bind-pat & {:keys [trial depth rs side]
-               :or   {depth Integer/MAX_VALUE side :any}}]
-  (let [rs       (or rs (jrefs :trial trial :exclude-test true))
-        sqls     (sqlrefs :trial trial)
-        side-fn  (case side
-                   :lhs (fn [b] (re-find bind-pat (:lhs b)))
-                   :rhs (fn [b] (re-find bind-pat (:rhs b)))
-                   (fn [b] (or (re-find bind-pat (:lhs b))
-                               (re-find bind-pat (:rhs b)))))
-        matchers (->> sqls
-                      (keep (fn [r]
-                              (let [hits (filter side-fn (:sqlref/col-binds r))]
-                                (when (seq hits)
-                                  {:mapper-sym (:sqlref/symbol r)
-                                   :col-binds  hits})))))]
+     (sql-impact #\"source_process_id\" :trial \"tradehub\")
+     (sql-impact #\"process_id\" :trial \"tradehub\" :source :param-binds)
+     (sql-impact #\"process_id\" :trial \"tradehub\" :source :any)"
+  [bind-pat & {:keys [trial depth rs side source]
+               :or   {depth Integer/MAX_VALUE side :any source :col-binds}}]
+  (let [rs           (or rs (jrefs :trial trial :exclude-test true))
+        sqls         (sqlrefs :trial trial)
+        use-col?     (#{:col-binds :any} source)
+        use-param?   (#{:param-binds :any} source)
+        col-side-fn  (case side
+                       :lhs (fn [b] (re-find bind-pat (:lhs b)))
+                       :rhs (fn [b] (re-find bind-pat (:rhs b)))
+                       (fn [b] (or (re-find bind-pat (:lhs b))
+                                   (re-find bind-pat (:rhs b)))))
+        param-side-fn (fn [b] (re-find bind-pat (:col b)))
+        matchers     (->> sqls
+                          (keep (fn [r]
+                                  (let [col-hits   (when use-col?
+                                                     (filter col-side-fn (:sqlref/col-binds r)))
+                                        param-hits (when use-param?
+                                                     (filter param-side-fn (:sqlref/param-binds r)))]
+                                    (when (or (seq col-hits) (seq param-hits))
+                                      (cond-> {:mapper-sym (:sqlref/symbol r)}
+                                        (seq col-hits)   (assoc :col-binds col-hits)
+                                        (seq param-hits) (assoc :param-binds param-hits)))))))]
     (->> matchers
          (mapv (fn [{:keys [mapper-sym] :as m}]
                  (assoc m :upstream (impact mapper-sym :depth depth :rs rs)))))))
@@ -546,18 +560,21 @@
 
    各 Mapper エントリ:
      :mapper-sym  - Mapper メソッドのシンボル
-     :col-binds   - マッチした縛り条件
-     :upstream    - [{:class :layer :fan-in :syms} ...] fan-in 降順
+     :col-binds   - マッチした col-binds（:source に :col-binds/:any が含まれる場合）
+     :param-binds - マッチした param-binds（:source に :param-binds/:any が含まれる場合）
+     :upstream    - [{:class :layer :fan-in} ...] fan-in 降順
 
    サマリ:
      :all-classes - 全 Mapper に渡るユニーク上流クラス集合（fan-in 付き、降順）
 
-   opts: bind-pat, trial, depth, rs, side, noise-cls?（除外述語）
+   opts: bind-pat, trial, depth, rs, side, source, noise-cls?（除外述語）
+   :source の詳細は sql-impact を参照。
 
    例:
-     (sql-impact-report #\"source_process_id\" :trial \"tradehub\")"
-  [bind-pat & {:keys [trial depth rs side noise-cls?]
-               :or   {depth Integer/MAX_VALUE side :any
+     (sql-impact-report #\"source_process_id\" :trial \"tradehub\")
+     (sql-impact-report #\"process_id\" :trial \"tradehub\" :source :any)"
+  [bind-pat & {:keys [trial depth rs side source noise-cls?]
+               :or   {depth Integer/MAX_VALUE side :any source :col-binds
                       noise-cls? (constantly false)}}]
   (let [rs       (or rs (jrefs :trial trial :exclude-test true))
         fi-map   (->> (fan-in rs)
@@ -568,7 +585,7 @@
                                 (assoc m cls (apply max (map second pairs))))
                               {}))
         cls-only (fn [sym] (first (str/split sym #"/")))
-        impacts  (sql-impact bind-pat :trial trial :depth depth :rs rs :side side)
+        impacts  (sql-impact bind-pat :trial trial :depth depth :rs rs :side side :source source)
         enrich   (fn [upstream]
                    (->> upstream
                         (map cls-only)
@@ -592,7 +609,7 @@
   "複数の bind-pat を一括処理して変更影響レポートのマップを返す。
 
    bind-pats: [[label regexp] ...] のベクタ
-   opts: sql-impact-report と同じ（:trial :depth :rs :side :noise-cls?）
+   opts: sql-impact-report と同じ（:trial :depth :rs :side :source :noise-cls?）
 
    戻り値: [{:label :bind-pat :mappers :all-classes} ...]
 
@@ -600,7 +617,10 @@
      (sql-impact-report-multi
        [[\"source_process_id\" #\"source_process_id\"]
         [\"work_process_id\"   #\"work_process_id\"]]
-       :trial \"tradehub\")"
+       :trial \"tradehub\")
+     (sql-impact-report-multi
+       [[\"process_id\" #\"process_id\"]]
+       :trial \"tradehub\" :source :any)"
   [bind-pats & opts]
   (mapv (fn [[label pat]]
           (let [r (apply sql-impact-report pat opts)]

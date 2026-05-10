@@ -490,15 +490,22 @@ MyBatis の `@Select` 等アノテーションを静的解析して、どの Map
 SQL の縛り条件パターンを起点に呼び出しグラフを遡り、
 変更影響を fan-in・レイヤー・cochange 回数付きで可視化する。
 
+`:source` オプションで検索対象の bind 種別を選べる：
+- `:col-binds`（デフォルト）: `table.col = alias.col` 形式の JOIN 縛り
+- `:param-binds`: `col = #{param}` 形式の WHERE 絞り込み（`:col` にマッチ）
+- `:any`: 両方
+
 ```clojure
 (let [rs      (core/jrefs :trial "tradehub" :exclude-test true)
       noise?  (fn [s] (boolean (re-find #"^(Acl|ACL|Ida|IDA)" s)))
 
-      ;; 複数パターンを一括処理して cochange と照合
+      ;; JOIN 縛り（col-binds）で検索（デフォルト）
+      ;; WHERE 句パラメータ（param-binds）も含めたい場合は :source :any
       reports (->> (core/sql-impact-report-multi
                      [["source_process_id" #"source_process_id"]]
                      :trial "tradehub"
                      :rs rs
+                     :source :col-binds  ; :any にすると param-binds も対象になる
                      :noise-cls? noise?)
                    (map #(core/sql-cochange-check % :trial "tradehub")))]
 
