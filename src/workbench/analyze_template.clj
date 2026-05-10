@@ -229,4 +229,31 @@
                       (:sqlref/col-binds r))]
       (println (str "      " (:lhs b) " = " (:rhs b))))))
 
+;; =============================================================================
+;; フェーズ 8: 逆引き影響分析（SQL 縛り → 全上流呼び出し元）
+;;
+;; SQL 縛りパターンにマッチする Mapper メソッドを起点に
+;; :refs を逆向きにたどって影響を受ける全上流シンボルを列挙する。
+;;
+;; ★ bind-pat を変えて複数のカラム縛りについて繰り返す。
+;; =============================================================================
+
+(let [rs       (core/jrefs :trial trial-name :exclude-test true)
+      bind-pat #"source_process_id"  ; ← プロジェクトに合わせて変更
+      cls-only (fn [sym] (first (str/split sym #"/")))
+      results  (core/sql-impact bind-pat :trial trial-name :rs rs)]
+
+  (println (format "\n--- sql-impact: \"%s\" 縛りを持つ Mapper → 全上流呼び出し元 ---"
+                   (str bind-pat)))
+  (println (format "  マッチした Mapper: %d 件" (count results)))
+
+  (doseq [{:keys [mapper-sym col-binds upstream]} results]
+    (println (str "\n  Mapper: " mapper-sym))
+    (doseq [b col-binds]
+      (println (str "    縛り: " (:lhs b) " = " (:rhs b))))
+    (let [cls-sorted (->> upstream (map cls-only) (remove noise-cls?) distinct sort)]
+      (println (format "    上流クラス数: %d" (count cls-sorted)))
+      (doseq [c cls-sorted]
+        (println (str "      " c))))))
+
 (core/stop!)

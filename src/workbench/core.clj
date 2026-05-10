@@ -14,6 +14,7 @@
    [workbench.ingest    :as ingest]
    [workbench.jref      :as jref]
    [workbench.query     :as query]   [workbench.sqlref    :as sqlref]   [workbench.visualize :as visualize]
+   [xtdb.api            :as xt]
    [xtdb.node           :as xtn]))
 
 ;; -------------------------
@@ -24,6 +25,7 @@
 
 (defn start!
   "XTDB ノードを起動する。すでに起動済みなら何もしない。
+   永続化ログが存在する場合はリプレイ完了を待機する。
 
    オプション:
      :persist? - true でローカルディレクトリに永続化（デフォルト true）
@@ -41,7 +43,14 @@
          (if persist?
            {:log         [:local {:path (str db-path "/log")}]
             :index-store [:local {:path (str db-path "/index-store")}]}
-           {}))))
+           {})))
+     ;; ログが存在する場合はリプレイ完了を待機する
+     (let [log-file (java.io.File. (str db-path "/log/LOG"))]
+       (when (.exists log-file)
+         (print "[start!] replaying log...")
+         (flush)
+         (xt/execute-tx @state [])  ; 空 tx でリプレイを同期的に完了させる
+         (println " done."))))
    :started))
 
 (defn stop!
@@ -485,6 +494,42 @@
         ups  (impact sym :depth depth :rs rs)
         downs (deps   sym :depth depth :rs rs)]
     (into #{sym} (concat ups downs))))
+
+(defn sql-impact
+  "SQL 縛りパターンにマッチする Mapper メソッドを起点に
+   :refs を逆向きたどって影響を受ける全上流シンボルを返す。
+
+   bind-pat: col-binds の :lhs/:rhs に対してマッチする正規表現
+   opts:
+     :trial  - トライアル識別子
+     :depth  - 上流探索深さ（デフォルト Integer/MAX_VALUE = 全上流）
+     :rs     - 対象 refs（デフォルト (jrefs :trial trial :exclude-test true)）
+     :side   - :lhs :rhs :any のいずれか（デフォルト :any）
+
+   戻り値: [{:mapper-sym \"...\"  ; マッチした Mapper メソッド
+             :col-binds [...]    ; マッチした縛り条件
+             :upstream #{...}}]  ; 上流シンボル集合
+
+   例:
+     (sql-impact #\"source_process_id\" :trial \"tradehub\")"
+  [bind-pat & {:keys [trial depth rs side]
+               :or   {depth Integer/MAX_VALUE side :any}}]
+  (let [rs       (or rs (jrefs :trial trial :exclude-test true))
+        sqls     (sqlrefs :trial trial)
+        side-fn  (case side
+                   :lhs (fn [b] (re-find bind-pat (:lhs b)))
+                   :rhs (fn [b] (re-find bind-pat (:rhs b)))
+                   (fn [b] (or (re-find bind-pat (:lhs b))
+                               (re-find bind-pat (:rhs b)))))
+        matchers (->> sqls
+                      (keep (fn [r]
+                              (let [hits (filter side-fn (:sqlref/col-binds r))]
+                                (when (seq hits)
+                                  {:mapper-sym (:sqlref/symbol r)
+                                   :col-binds  hits})))))]
+    (->> matchers
+         (mapv (fn [{:keys [mapper-sym] :as m}]
+                 (assoc m :upstream (impact mapper-sym :depth depth :rs rs)))))))
 
 ;; -------------------------
 ;; co-change (git history)
