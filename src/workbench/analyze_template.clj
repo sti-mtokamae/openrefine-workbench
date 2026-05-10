@@ -290,4 +290,73 @@
         (println (format "    %-42s [%s] fan-in=%d cochange=%d"
                          class (layer-label layer) fan-in cochange-cnt))))))
 
+;; =============================================================================
+;; フェーズ 9: 注目クラス深堀り分析
+;;
+;; cochange 上位 / fan-in 上位などから「気になるクラス」を選び、
+;; impact（呼び出し元）/ deps（呼び出し先）/ cochange 上位ペアを精査する。
+;;
+;; ★ targets にプロジェクトの注目クラス名を列挙する（クラス名のみ、/ は不要）。
+;; ★ module-re はプロジェクト設定の値がそのまま使われる。
+;; =============================================================================
+
+(println "\n=== フェーズ 9: 注目クラス深堀り ===")
+(try
+  (let [rs        (core/jrefs :trial trial-name :exclude-test true)
+
+        ;; ★ 注目クラスをここに列挙する
+        targets   ["ServiceImplA"
+                   "ControllerB"
+                   "EntityC"]
+
+        cc-rows   (core/cochanges :trial trial-name :min-count 3)
+
+        ;; クラス名 → cochange 上位ペア（相手クラス名 + モジュール + カウント）
+        cls-top-cc
+        (fn [cls]
+          (->> cc-rows
+               (filter #(or (= cls (path->cls (:a %)))
+                            (= cls (path->cls (:b %)))))
+               (map (fn [{:keys [a b cnt]}]
+                      {:partner (if (= cls (path->cls a)) (path->cls b) (path->cls a))
+                       :mod     (if (= cls (path->cls a)) (path->mod b) (path->mod a))
+                       :cnt cnt}))
+               (remove #(noise-cls? (:partner %)))
+               (sort-by :cnt >)
+               (take 8)))]
+
+    (doseq [cls targets]
+      (println (format "\n=== %s ===" cls))
+
+      ;; 上流（呼び出し元）: cls を呼んでいるクラス 1ホップ
+      ;; impact にはクラス名のみを渡す（"ClassName" — "/" サフィックス不要）
+      (let [up (->> (core/impact cls :depth 1 :rs rs)
+                    (map #(first (str/split % #"/")))
+                    (remove noise-cls?)
+                    (remove #{cls})
+                    distinct sort)]
+        (println (format "  呼び出し元クラス (1hop): %d" (count up)))
+        (doseq [s (take 10 up)] (println (str "    " s))))
+
+      ;; 下流（呼び出し先）: cls が呼んでいるクラス 1ホップ
+      ;; deps にはクラス名のみを渡す（"ClassName" — "/" サフィックス不要）
+      (let [dn (->> (core/deps cls :depth 1 :rs rs)
+                    (map #(first (str/split % #"/")))
+                    (remove noise-cls?)
+                    (remove #{cls})
+                    distinct sort)]
+        (println (format "  呼び出し先クラス (1hop): %d" (count dn)))
+        (doseq [s (take 10 dn)] (println (str "    " s))))
+
+      ;; cochange 上位ペア（min-count 3 = 3回以上同時変更）
+      (let [pairs (cls-top-cc cls)]
+        (println "  cochange 上位 (min-count 3):")
+        (doseq [{:keys [partner mod cnt]} pairs]
+          (println (format "    %3d  %-45s [%s]" cnt partner (or mod "?")))))))
+
+  (catch Exception ex
+    (println (str "  [WARN] フェーズ 9 failed: " (ex-message ex)))))
+
+(core/stop!)
+
 (core/stop!)
