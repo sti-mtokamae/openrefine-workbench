@@ -406,3 +406,148 @@ workbench.core/tree
 ```clojure
 (core/stop!)
 ```
+
+---
+
+## 10. SQL 縛り解析（MyBatis Mapper）
+
+MyBatis の `@Select` 等アノテーションを静的解析して、どの Mapper がどの列条件を持つかを抽出する。
+
+### データ投入
+
+```clojure
+;; Java ソースから MyBatis SQL を抽出して XTDB に取り込む
+(core/sqlref! ["repo/common-lib" "repo/common-app"] :trial "tradehub")
+
+;; 確認
+(count (core/sqlrefs :trial "tradehub"))  ; => 814 件
+```
+
+### 縛り条件でフィルタ
+
+`col-binds` は `table.col = alias.col` 形式の JOIN 条件。`param-binds` は `#{param}` 埋め込み変数。
+
+```clojure
+;; "process_id" という文字列を含む JOIN 条件を持つ Mapper を探す
+(->> (core/sqlrefs :trial "tradehub")
+     (filter #(some (fn [b] (re-find #"process_id" (:lhs b)))
+                    (:sqlref/col-binds %)))
+     (map :sqlref/symbol))
+```
+
+---
+
+## 11. 共変更解析（git co-change）
+
+コミット履歴から「一緒に変更されるファイルペア」を集計し、
+静的解析（call graph）では見えない暗黙の結合を炙り出す。
+
+### データ投入
+
+**注意**: `cochange!` は 10〜30 万ペアを XTDB に書き込むため `-Xmx1g` 以上を推奨。
+同じ `.xtdb/` に複数プロセスで書き込むと compaction が競合するため、必ず単一プロセスで全投入を行う。
+
+```clojure
+(core/cochange! "repo/tradehub"
+                :trial "tradehub"
+                :filter-path "src/main/java")
+```
+
+### 共変更 top 30（ACL/IDA 等ノイズ除外）
+
+```clojure
+(let [noise-cls? (fn [s] (boolean (re-find #"^(Acl|ACL|Ida|IDA)" s)))
+      path->cls  (fn [p] (-> p (clojure.string/replace #".*/" "")
+                               (clojure.string/replace #"\.java$" "")))]
+  (->> (core/cochanges :trial "tradehub" :min-count 3)
+       (remove #(noise-cls? (path->cls (:a %))))
+       (remove #(noise-cls? (path->cls (:b %))))
+       (take 30)
+       (map (fn [{:keys [a b cnt]}]
+              {:a (path->cls a) :b (path->cls b) :cnt cnt}))))
+```
+
+### クロスモジュール共変更を抽出
+
+```clojure
+;; モジュール名抽出（プロジェクトのパッケージ構造に合わせて変更）
+(let [path->mod  (fn [p] (second (re-find #"com/example/web/([^/]+)/" p)))
+      path->cls  (fn [p] (-> p (clojure.string/replace #".*/" "")
+                               (clojure.string/replace #"\.java$" "")))]
+  (->> (core/cochanges :trial "tradehub" :min-count 3)
+       (filter #(let [ma (path->mod (:a %)) mb (path->mod (:b %))]
+                  (and ma mb (not= ma mb))))
+       (take 20)
+       (map (fn [{:keys [a b cnt]}]
+              {:cnt cnt :a-mod (path->mod a) :b-mod (path->mod b)
+               :a (path->cls a) :b (path->cls b)}))))
+```
+
+---
+
+## 12. SQL 変更影響レポート（sql-impact-report）
+
+SQL の縛り条件パターンを起点に呼び出しグラフを遡り、
+変更影響を fan-in・レイヤー・cochange 回数付きで可視化する。
+
+```clojure
+(let [rs      (core/jrefs :trial "tradehub" :exclude-test true)
+      noise?  (fn [s] (boolean (re-find #"^(Acl|ACL|Ida|IDA)" s)))
+
+      ;; 複数パターンを一括処理して cochange と照合
+      reports (->> (core/sql-impact-report-multi
+                     [["source_process_id" #"source_process_id"]]
+                     :trial "tradehub"
+                     :rs rs
+                     :noise-cls? noise?)
+                   (map #(core/sql-cochange-check % :trial "tradehub")))]
+
+  (doseq [{:keys [label all-classes]} reports]
+    (println (str "=== " label " ==="))
+    (doseq [{:keys [class layer fan-in cochange-cnt]} all-classes]
+      (println (format "  %-40s [%s] fan-in=%d cochange=%d%s"
+                       class (name layer) fan-in cochange-cnt
+                       (when (zero? cochange-cnt) " ← 履歴なし"))))))
+```
+
+**読み方のポイント**:
+- `cochange-cnt = 0`: 静的解析では影響ありだが git 変更なし = 未テスト経路の疑い
+- Controller 層（layer=:controller）が出現 = エントリポイントまで波及
+- fan-in が高いクラスほど変更コストが大きい
+
+---
+
+## 13. 注目クラス深堀り（impact / deps / cochange）
+
+fan-in 上位や cochange 上位のクラスを選んで 1 ホップの呼び出し元・呼び出し先・共変更パートナーを確認する。
+
+```clojure
+(let [rs        (core/jrefs :trial "tradehub" :exclude-test true)
+      targets   ["FooServiceImpl" "BarController"]
+      path->cls (fn [p] (-> p (clojure.string/replace #".*/" "")
+                              (clojure.string/replace #"\.java$" "")))
+      cc-rows   (core/cochanges :trial "tradehub" :min-count 3)
+      cls-top-cc (fn [cls]
+                   (->> cc-rows
+                        (filter #(or (= cls (path->cls (:a %)))
+                                     (= cls (path->cls (:b %)))))
+                        (map (fn [{:keys [a b cnt]}]
+                               {:partner (if (= cls (path->cls a))
+                                           (path->cls b) (path->cls a))
+                                :cnt cnt}))
+                        (sort-by :cnt >)
+                        (take 8)))]
+
+  (doseq [cls targets]
+    (println (str "\n=== " cls " ==="))
+    ;; 呼び出し元 1ホップ（impact にはクラス名のみ渡す。"/" 不要）
+    (println "  呼び出し元:" (count (core/impact cls :depth 1 :rs rs)))
+    ;; 呼び出し先 1ホップ
+    (println "  呼び出し先:" (count (core/deps cls :depth 1 :rs rs)))
+    ;; cochange 上位
+    (doseq [{:keys [partner cnt]} (cls-top-cc cls)]
+      (println (format "    %3d  %s" cnt partner)))))
+```
+
+**`impact` / `deps` の引数に `"/"` は不要**: クラス名のみ渡すと `ClassName/` 前方一致で全メソッドを展開する。
+`"ClassName/*"` や `"ClassName/"` を渡すと前方一致が機能しないので注意。
