@@ -588,6 +588,25 @@
     {:mappers     rows
      :all-classes all-cls}))
 
+(defn sql-impact-report-multi
+  "複数の bind-pat を一括処理して変更影響レポートのマップを返す。
+
+   bind-pats: [[label regexp] ...] のベクタ
+   opts: sql-impact-report と同じ（:trial :depth :rs :side :noise-cls?）
+
+   戻り値: [{:label :bind-pat :mappers :all-classes} ...]
+
+   例:
+     (sql-impact-report-multi
+       [[\"source_process_id\" #\"source_process_id\"]
+        [\"work_process_id\"   #\"work_process_id\"]]
+       :trial \"tradehub\")"
+  [bind-pats & opts]
+  (mapv (fn [[label pat]]
+          (let [r (apply sql-impact-report pat opts)]
+            (assoc r :label label :bind-pat pat)))
+        bind-pats))
+
 ;; -------------------------
 ;; co-change (git history)
 ;; -------------------------
@@ -624,3 +643,61 @@
                 (filter #(>= (:cnt %) min-count))
                 (sort-by :cnt >))]
     (if top (take top rs) rs)))
+
+(defn sql-cochange-check
+  "sql-impact-report の結果と cochange 履歴を照合し、
+   影響クラスが実際に Mapper と共変更されているかを検証する。
+
+   各上流クラスに :cochange-cnt（共変更回数、0=履歴なし）を付与する。
+   - cnt > 0 : 変更履歴が裏付けている（影響分析と一致）
+   - cnt = 0 : 静的解析で検出されたが git 履歴に変更の痕跡なし
+
+   opts:
+     :trial     - トライアル識別子
+     :min-count - cochange の最小カウント（デフォルト 1）
+
+   例:
+     (-> (sql-impact-report #\"source_process_id\" :trial \"tradehub\")
+         (sql-cochange-check :trial \"tradehub\"))"
+  [{:keys [mappers all-classes] :as report}
+   & {:keys [trial min-count] :or {min-count 1}}]
+  (let [;; class → file パスの逆引きマップ（refs の :ref/file から構築）
+        cls->file (->> (q '(from :refs [{:ref/from from :ref/file file :ref/trial t}]))
+                       (filter #(or (nil? trial) (= trial (:t %))))
+                       (map (fn [{:keys [from file]}]
+                              [(first (str/split from #"/")) file]))
+                       (into {}))
+        ;; cochange ペアを (file-a × file-b) の双方向セットに
+        cc-pairs  (->> (cochanges :trial trial :min-count min-count)
+                       (reduce (fn [m {:keys [a b cnt]}]
+                                 (-> m
+                                     (update [a b] (fnil max 0) cnt)
+                                     (update [b a] (fnil max 0) cnt)))
+                               {}))
+        cc-cnt    (fn [file-a file-b]
+                    (or (get cc-pairs [file-a file-b]) 0))
+        enrich-upstream
+        (fn [mapper-sym upstream]
+          (let [mapper-cls  (first (str/split mapper-sym #"/"))
+                mapper-file (get cls->file mapper-cls)]
+            (mapv (fn [{:keys [class] :as u}]
+                    (let [cls-file (get cls->file class)
+                          cnt      (if (and mapper-file cls-file)
+                                     (cc-cnt mapper-file cls-file)
+                                     0)]
+                      (assoc u :cochange-cnt cnt)))
+                  upstream)))
+        new-mappers
+        (mapv (fn [{:keys [mapper-sym upstream] :as m}]
+                (assoc m :upstream (enrich-upstream mapper-sym upstream)))
+              mappers)
+        new-all
+        (let [cls->cnt (->> new-mappers
+                            (mapcat :upstream)
+                            (group-by :class)
+                            (map (fn [[cls xs]] [cls (apply max (map :cochange-cnt xs))]))
+                            (into {}))]
+          (mapv (fn [cls-entry]
+                  (assoc cls-entry :cochange-cnt (get cls->cnt (:class cls-entry) 0)))
+                all-classes))]
+    (assoc report :mappers new-mappers :all-classes new-all)))

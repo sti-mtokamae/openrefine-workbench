@@ -230,53 +230,64 @@
       (println (str "      " (:lhs b) " = " (:rhs b))))))
 
 ;; =============================================================================
-;; フェーズ 8: SQL 変更影響レポート（sql-impact-report）
+;; フェーズ 8: SQL 変更影響レポート（複数パターン + cochange 照合）
 ;;
-;; SQL 縛りパターンにマッチする Mapper から全上流クラスを列挙し、
-;; fan-in スコア・レイヤー分類を付与して変更コストを可視化する。
+;; SQL 縛りパターンを複数まとめて分析し、fan-in + cochange 履歴で変更コストを可視化。
+;; cochange-cnt=0 のクラスは「静的解析で検出されたが変更履歴なし（未テスト経路の疑い）」。
 ;;
-;; ★ bind-pat をプロジェクトのカラム名パターンに合わせて変更する。
-;; ★ 複数パターンを分析する場合はこのブロックを繰り返す。
+;; ★ bind-pats にプロジェクトのカラム名パターンを追加する。
 ;; =============================================================================
 
-(let [rs       (core/jrefs :trial trial-name :exclude-test true)
-      bind-pat #"source_process_id"  ; ← プロジェクトに合わせて変更
-      report   (core/sql-impact-report bind-pat
-                                        :trial trial-name
-                                        :rs rs
-                                        :noise-cls? noise-cls?)
-      {:keys [mappers all-classes]} report
+(let [rs          (core/jrefs :trial trial-name :exclude-test true)
+      bind-pats   [;; ★ [ラベル 正規表現] の形式で追加する
+                   ["source_process_id" #"source_process_id"]
+                   ;; ["work_process_id"   #"work_process_id"]
+                   ]
       layer-label {:controller "Controller" :service "Service"
-                   :mapper "Mapper" :infra "Infra" :other "Other"}]
+                   :mapper "Mapper" :infra "Infra" :other "Other"}
+      reports     (->> (core/sql-impact-report-multi bind-pats
+                                                      :trial trial-name
+                                                      :rs rs
+                                                      :noise-cls? noise-cls?)
+                       (map #(core/sql-cochange-check % :trial trial-name)))]
 
-  (println (format "\n=== SQL 変更影響レポート: \"%s\" ===" (str bind-pat)))
-  (println (format "  マッチ Mapper: %d 件  / 上流ユニーククラス: %d 件"
-                   (count mappers) (count all-classes)))
+  (doseq [{:keys [label mappers all-classes]} reports]
+    (println (format "\n=== SQL 変更影響レポート: \"%s\" ===" label))
+    (println (format "  マッチ Mapper: %d 件 / 上流ユニーククラス: %d 件"
+                     (count mappers) (count all-classes)))
 
-  ;; --- サマリ: 全上流クラスを fan-in 降順 ---
-  (println "\n--- 上流クラス一覧（fan-in 降順・変更コスト高い順）---")
-  (println (format "  %-45s %-12s %s" "class" "layer" "fan-in"))
-  (println (str "  " (apply str (repeat 65 "-"))))
-  (doseq [{:keys [class layer fan-in]} all-classes]
-    (println (format "  %-45s %-12s %d" class (layer-label layer) fan-in)))
+    ;; --- サマリ: 全上流クラスを fan-in 降順、cochange-cnt 付き ---
+    (println "\n  --- 上流クラス一覧（fan-in 降順）---")
+    (println (format "  %-42s %-12s %6s  %s" "class" "layer" "fan-in" "cochange"))
+    (println (str "  " (apply str (repeat 70 "-"))))
+    (doseq [{:keys [class layer fan-in cochange-cnt]} all-classes]
+      (let [warn (when (zero? cochange-cnt) " ← 履歴なし")]
+        (println (format "  %-42s %-12s %6d  %3d%s"
+                         class (layer-label layer) fan-in cochange-cnt warn))))
 
-  ;; --- モジュール別集計 ---
-  (println "\n--- レイヤー別クラス数 ---")
-  (doseq [[layer cnt] (->> all-classes
-                           (group-by :layer)
-                           (map (fn [[l xs]] [(layer-label l) (count xs)]))
-                           (sort-by second >))]
-    (println (format "  %-12s %d 件" layer cnt)))
+    ;; --- レイヤー別集計 ---
+    (println "\n  --- レイヤー別クラス数 ---")
+    (doseq [[layer cnt] (->> all-classes
+                             (group-by :layer)
+                             (map (fn [[l xs]] [(layer-label l) (count xs)]))
+                             (sort-by second >))]
+      (println (format "  %-12s %d 件" layer cnt)))
 
-  ;; --- Mapper 別詳細 ---
-  (println "\n--- Mapper 別詳細 ---")
-  (doseq [{:keys [mapper-sym col-binds upstream]} mappers]
-    (println (str "\n  [Mapper] " mapper-sym))
-    (doseq [b col-binds]
-      (println (str "    縛り: " (:lhs b) " = " (:rhs b))))
-    (println (format "    上流 %d クラス:" (count upstream)))
-    (doseq [{:keys [class layer fan-in]} upstream]
-      (println (format "      %-45s [%s] fan-in=%d"
-                       class (layer-label layer) fan-in)))))
+    ;; --- cochange なし（要注意）クラス ---
+    (let [no-cc (filter #(zero? (:cochange-cnt %)) all-classes)]
+      (when (seq no-cc)
+        (println (format "\n  --- 変更履歴なし（git 未確認）: %d 件 ---" (count no-cc)))
+        (doseq [{:keys [class layer]} no-cc]
+          (println (format "  %-42s [%s]" class (layer-label layer))))))
+
+    ;; --- Mapper 別詳細 ---
+    (println "\n  --- Mapper 別詳細 ---")
+    (doseq [{:keys [mapper-sym col-binds upstream]} mappers]
+      (println (str "\n  [Mapper] " mapper-sym))
+      (doseq [b col-binds]
+        (println (str "    縛り: " (:lhs b) " = " (:rhs b))))
+      (doseq [{:keys [class layer fan-in cochange-cnt]} upstream]
+        (println (format "    %-42s [%s] fan-in=%d cochange=%d"
+                         class (layer-label layer) fan-in cochange-cnt))))))
 
 (core/stop!)
