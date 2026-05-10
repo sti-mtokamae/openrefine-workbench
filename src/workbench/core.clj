@@ -531,6 +531,63 @@
          (mapv (fn [{:keys [mapper-sym] :as m}]
                  (assoc m :upstream (impact mapper-sym :depth depth :rs rs)))))))
 
+(defn- classify-layer
+  "クラス名末尾からレイヤーを推定する。"
+  [cls]
+  (cond
+    (re-find #"Controller$" cls)          :controller
+    (re-find #"ServiceImpl$|Service$" cls) :service
+    (re-find #"Mapper$|Repository$|Dao$" cls) :mapper
+    (re-find #"Aspect$|Interceptor$|Filter$|Handler$" cls) :infra
+    :else                                  :other))
+
+(defn sql-impact-report
+  "sql-impact の結果に fan-in スコア・レイヤー分類を付与した変更影響レポートを返す。
+
+   各 Mapper エントリ:
+     :mapper-sym  - Mapper メソッドのシンボル
+     :col-binds   - マッチした縛り条件
+     :upstream    - [{:class :layer :fan-in :syms} ...] fan-in 降順
+
+   サマリ:
+     :all-classes - 全 Mapper に渡るユニーク上流クラス集合（fan-in 付き、降順）
+
+   opts: bind-pat, trial, depth, rs, side, noise-cls?（除外述語）
+
+   例:
+     (sql-impact-report #\"source_process_id\" :trial \"tradehub\")"
+  [bind-pat & {:keys [trial depth rs side noise-cls?]
+               :or   {depth Integer/MAX_VALUE side :any
+                      noise-cls? (constantly false)}}]
+  (let [rs       (or rs (jrefs :trial trial :exclude-test true))
+        fi-map   (->> (fan-in rs)
+                      (map (fn [{:keys [symbol count]}]
+                             [(first (str/split symbol #"/")) count]))
+                      (group-by first)
+                      (reduce (fn [m [cls pairs]]
+                                (assoc m cls (apply max (map second pairs))))
+                              {}))
+        cls-only (fn [sym] (first (str/split sym #"/")))
+        impacts  (sql-impact bind-pat :trial trial :depth depth :rs rs :side side)
+        enrich   (fn [upstream]
+                   (->> upstream
+                        (map cls-only)
+                        (remove noise-cls?)
+                        distinct
+                        (map (fn [cls]
+                               {:class  cls
+                                :layer  (classify-layer cls)
+                                :fan-in (get fi-map cls 0)}))
+                        (sort-by :fan-in >)))
+        rows     (mapv (fn [m] (assoc m :upstream (enrich (:upstream m)))) impacts)
+        all-cls  (->> rows
+                      (mapcat :upstream)
+                      (group-by :class)
+                      (map (fn [[cls xs]] (first xs)))
+                      (sort-by :fan-in >))]
+    {:mappers     rows
+     :all-classes all-cls}))
+
 ;; -------------------------
 ;; co-change (git history)
 ;; -------------------------

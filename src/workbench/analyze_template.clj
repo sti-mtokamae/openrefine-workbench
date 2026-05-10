@@ -230,30 +230,53 @@
       (println (str "      " (:lhs b) " = " (:rhs b))))))
 
 ;; =============================================================================
-;; フェーズ 8: 逆引き影響分析（SQL 縛り → 全上流呼び出し元）
+;; フェーズ 8: SQL 変更影響レポート（sql-impact-report）
 ;;
-;; SQL 縛りパターンにマッチする Mapper メソッドを起点に
-;; :refs を逆向きにたどって影響を受ける全上流シンボルを列挙する。
+;; SQL 縛りパターンにマッチする Mapper から全上流クラスを列挙し、
+;; fan-in スコア・レイヤー分類を付与して変更コストを可視化する。
 ;;
-;; ★ bind-pat を変えて複数のカラム縛りについて繰り返す。
+;; ★ bind-pat をプロジェクトのカラム名パターンに合わせて変更する。
+;; ★ 複数パターンを分析する場合はこのブロックを繰り返す。
 ;; =============================================================================
 
 (let [rs       (core/jrefs :trial trial-name :exclude-test true)
       bind-pat #"source_process_id"  ; ← プロジェクトに合わせて変更
-      cls-only (fn [sym] (first (str/split sym #"/")))
-      results  (core/sql-impact bind-pat :trial trial-name :rs rs)]
+      report   (core/sql-impact-report bind-pat
+                                        :trial trial-name
+                                        :rs rs
+                                        :noise-cls? noise-cls?)
+      {:keys [mappers all-classes]} report
+      layer-label {:controller "Controller" :service "Service"
+                   :mapper "Mapper" :infra "Infra" :other "Other"}]
 
-  (println (format "\n--- sql-impact: \"%s\" 縛りを持つ Mapper → 全上流呼び出し元 ---"
-                   (str bind-pat)))
-  (println (format "  マッチした Mapper: %d 件" (count results)))
+  (println (format "\n=== SQL 変更影響レポート: \"%s\" ===" (str bind-pat)))
+  (println (format "  マッチ Mapper: %d 件  / 上流ユニーククラス: %d 件"
+                   (count mappers) (count all-classes)))
 
-  (doseq [{:keys [mapper-sym col-binds upstream]} results]
-    (println (str "\n  Mapper: " mapper-sym))
+  ;; --- サマリ: 全上流クラスを fan-in 降順 ---
+  (println "\n--- 上流クラス一覧（fan-in 降順・変更コスト高い順）---")
+  (println (format "  %-45s %-12s %s" "class" "layer" "fan-in"))
+  (println (str "  " (apply str (repeat 65 "-"))))
+  (doseq [{:keys [class layer fan-in]} all-classes]
+    (println (format "  %-45s %-12s %d" class (layer-label layer) fan-in)))
+
+  ;; --- モジュール別集計 ---
+  (println "\n--- レイヤー別クラス数 ---")
+  (doseq [[layer cnt] (->> all-classes
+                           (group-by :layer)
+                           (map (fn [[l xs]] [(layer-label l) (count xs)]))
+                           (sort-by second >))]
+    (println (format "  %-12s %d 件" layer cnt)))
+
+  ;; --- Mapper 別詳細 ---
+  (println "\n--- Mapper 別詳細 ---")
+  (doseq [{:keys [mapper-sym col-binds upstream]} mappers]
+    (println (str "\n  [Mapper] " mapper-sym))
     (doseq [b col-binds]
       (println (str "    縛り: " (:lhs b) " = " (:rhs b))))
-    (let [cls-sorted (->> upstream (map cls-only) (remove noise-cls?) distinct sort)]
-      (println (format "    上流クラス数: %d" (count cls-sorted)))
-      (doseq [c cls-sorted]
-        (println (str "      " c))))))
+    (println (format "    上流 %d クラス:" (count upstream)))
+    (doseq [{:keys [class layer fan-in]} upstream]
+      (println (format "      %-45s [%s] fan-in=%d"
+                       class (layer-label layer) fan-in)))))
 
 (core/stop!)
