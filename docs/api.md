@@ -342,3 +342,128 @@ cochange 履歴と照合して変更コストを可視化する。
 
 **`:cochange-cnt = 0` の意味**: 静的解析で影響が検出されたが git 履歴に変更の痕跡がない
 = 未テスト経路の疑い、または実際には変更不要なパス。
+
+---
+
+## JaCoCo カバレッジ API（jacoco）
+
+JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届いていないメソッド」をクエリする。
+
+### 使用例
+
+```clojure
+;; JaCoCo XML を投入（差分同期・冪等）
+(jacoco! "/tmp/jacoco-report/jacoco.xml" :trial "tradehub")
+;; => {:put 2329, :delete 0}
+
+;; 全レコード取得
+(jacocos :trial "tradehub")
+
+;; 完全未カバーのみ
+(jacocos :trial "tradehub" :uncovered? true)
+
+;; 特定クラスのカバレッジ
+(jacocos :trial "tradehub" :class "DocumentAggregateServiceImpl")
+
+;; クラス単位サマリ（covered-methods=0 のクラスのみ）
+(coverage :trial "tradehub" :uncovered? true)
+```
+
+### `:jacoco` テーブルスキーマ（`jacoco!` で投入）
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `:jacoco/trial` | string | トライアル識別子 |
+| `:jacoco/class` | string | パッケージ付きクラス名（スラッシュ区切り） |
+| `:jacoco/class-simple` | string | クラス名のみ（`:refs` との照合用） |
+| `:jacoco/method` | string | メソッド名 |
+| `:jacoco/desc` | string | JVM ディスクリプタ |
+| `:jacoco/line` | long | メソッド開始行番号 |
+| `:jacoco/covered` | long | カバー済み行数（LINE counter） |
+| `:jacoco/missed` | long | 未カバー行数（LINE counter） |
+
+### `coverage` 戻り値スキーマ
+
+```clojure
+[{:class           "DocumentAggregateServiceImpl"
+  :covered-methods 0    ; covered > 0 のメソッド数
+  :total-methods   33   ; 全メソッド数
+  :covered-lines   0    ; カバー済み行数合計
+  :total-lines     487} ; 全行数合計
+ ...]
+```
+
+---
+
+## AI テスト生成 API（codegen）
+
+静的解析情報（`:refs` × `:sqlrefs` × `:jacoco`）を統合して、GitHub Models API 経由で JUnit 5 + Mockito テストコードを生成する。
+
+### 認証
+
+`GITHUB_TOKEN` 環境変数を優先し、なければ `gh auth token` で自動取得する。  
+`models:read` スコープがなくても動作することを確認済み。
+
+### 使用例
+
+```clojure
+;; コンテキストを確認してから生成
+(test-context "DocumentAggregateServiceImpl" :trial "tradehub")
+;; => {:trial "tradehub"
+;;     :class "DocumentAggregateServiceImpl"
+;;     :method nil
+;;     :direct-deps ["DocumentAggregateMapper/getAggregatableDocumentTypes" ...]
+;;     :sql-refs    [{:symbol "..." :col-binds [...] :param-binds [...]} ...]
+;;     :coverage    [{:method "resolveTargetProcessIds" :covered 0 :missed 15 :line 42} ...]}
+
+;; テストコードを生成（クラス全体）
+(println (gen-test "DocumentAggregateServiceImpl" :trial "tradehub"))
+
+;; 特定メソッドだけ
+(println (gen-test "DocumentAggregateServiceImpl" :trial "tradehub"
+                   :method "resolveTargetProcessIds"))
+
+;; モデルを指定
+(println (gen-test "DocumentAggregateServiceImpl" :trial "tradehub"
+                   :model "openai/gpt-4.1-mini"))
+
+;; 低レベル API（任意のプロンプト）
+(require '[workbench.codegen :as cg])
+(cg/chat-complete [{:role "system" :content "..."}
+                   {:role "user"   :content "..."}])
+```
+
+### `test-context` 戻り値スキーマ
+
+| フィールド | 説明 |
+|---|---|
+| `:direct-deps` | このクラス（メソッド）が直接呼び出す依存先シンボル（Mock 候補） |
+| `:sql-refs` | 依存先 Mapper メソッドの SQL 縛り情報（`:col-binds` / `:param-binds`） |
+| `:coverage` | JaCoCo カバレッジ（`:covered 0` = 完全未テスト） |
+
+### AI に渡されるプロンプト構成
+
+```
+## 対象
+<クラス名>[/<メソッド名>]
+
+## 直接依存（Mock 候補）
+  - DocumentAggregateMapper/getAggregatableDocumentTypes
+  - ...
+
+## SQL 縛り（MyBatis Mapper 経由）
+  - DocumentAggregateMapper/getAggregatableDocumentTypes
+    col-binds: p.project_id=cp.project_id, ...
+    param-binds: processId=#{context.processId}, ...
+
+## JaCoCo カバレッジ（covered=0 = 完全未テスト）
+  - resolveTargetProcessIds  [covered=0 missed=15]
+  - ...
+
+## 要件
+- JUnit 5 (@Test, @ExtendWith(MockitoExtension.class))
+- Mockito (@Mock, when(...).thenReturn(...))
+- covered=0 のメソッドを優先してテストする
+- SQL 縛りがある場合は Mapper の戻り値を Mock で制御するテストを含める
+- 日本語コメントでテストの意図を説明する
+```
