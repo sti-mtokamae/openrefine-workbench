@@ -4,7 +4,8 @@
  {org.clojure/clojure                    {:mvn/version "1.12.0"}
   com.xtdb/xtdb-core                     {:mvn/version "2.1.0"}
   com.github.danlentz/clj-xref           {:mvn/version "0.1.1"}
-  com.github.javaparser/javaparser-core  {:mvn/version "3.26.2"}}
+  com.github.javaparser/javaparser-core  {:mvn/version "3.26.2"}
+  cheshire/cheshire                      {:mvn/version "5.13.0"}}
 
  :aliases
  {:xtdb

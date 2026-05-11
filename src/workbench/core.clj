@@ -11,6 +11,7 @@
      (stop!)"
   (:require
    [clojure.string      :as str]
+   [workbench.codegen   :as codegen]
    [workbench.ingest    :as ingest]
    [workbench.jacoco    :as jacoco]
    [workbench.jref      :as jref]
@@ -775,3 +776,119 @@
                   (assoc cls-entry :cochange-cnt (get cls->cnt (:class cls-entry) 0)))
                 all-classes))]
     (assoc report :mappers new-mappers :all-classes new-all)))
+
+;; -------------------------
+;; AI テスト生成支援
+;; -------------------------
+
+(defn test-context
+  "クラス（+メソッド）のテスト生成コンテキストを構築する。
+   :refs / :sqlrefs / :jacoco を統合した構造化情報を返す。
+
+   opts:
+     :trial  - トライアル識別子
+     :method - メソッド名（nil のとき全メソッド）
+
+   例:
+     (test-context \"DocumentAggregateServiceImpl\" :trial \"tradehub\")
+     (test-context \"DocumentAggregateServiceImpl\" :trial \"tradehub\"
+                   :method \"resolveTargetProcessIds\")"
+  [class-name & {:keys [trial method]}]
+  (let [;; 直接の下流依存（深さ1）— Mock 候補
+        rs      (jrefs :trial trial :prefix class-name)
+        direct  (if method
+                  (->> rs
+                       (filter #(= (:from %) (str class-name "/" method)))
+                       (map :to) distinct vec)
+                  (->> rs (map :to) distinct vec))
+        ;; SQL 縛り（このクラスが使う sqlref）
+        sqls    (->> (sqlrefs :trial trial)
+                     (filter #(str/starts-with? (:sqlref/class %) class-name))
+                     (mapv (fn [r]
+                             (cond-> {:symbol     (:sqlref/symbol r)
+                                      :method     (:sqlref/method r)
+                                      :sql        (:sqlref/sql r)}
+                               (seq (:sqlref/col-binds r))
+                               (assoc :col-binds (:sqlref/col-binds r))
+                               (seq (:sqlref/param-binds r))
+                               (assoc :param-binds (:sqlref/param-binds r))))))
+        ;; JaCoCo カバレッジ
+        jac     (jacocos :trial trial :class class-name)
+        jac-flt (if method
+                  (filter #(= method (:jacoco/method %)) jac)
+                  jac)
+        cov     (mapv (fn [r]
+                        {:method  (:jacoco/method r)
+                         :covered (:jacoco/covered r)
+                         :missed  (:jacoco/missed r)
+                         :line    (:jacoco/line r)})
+                      jac-flt)]
+    {:trial       trial
+     :class       class-name
+     :method      method
+     :direct-deps direct
+     :sql-refs    sqls
+     :coverage    cov}))
+
+(defn gen-test
+  "test-context の情報を AI に渡して JUnit 5 + Mockito テストコードを生成する。
+
+   戻り値: 生成されたテストコードの文字列
+
+   opts:
+     :trial  - トライアル識別子
+     :method - メソッド名（nil のとき全メソッド対象）
+     :model  - 使用モデル (default: \"openai/gpt-4.1\")
+
+   例:
+     (gen-test \"DocumentAggregateServiceImpl\" :trial \"tradehub\")
+     (gen-test \"DocumentAggregateServiceImpl\" :trial \"tradehub\"
+               :method \"resolveTargetProcessIds\")"
+  [class-name & {:keys [trial method model]}]
+  (let [ctx    (test-context class-name :trial trial :method method)
+        target (if method
+                 (str class-name "/" method)
+                 class-name)
+        deps-txt
+        (if (seq (:direct-deps ctx))
+          (str/join "\n" (map #(str "  - " %) (:direct-deps ctx)))
+          "  (なし)")
+        sql-txt
+        (if (seq (:sql-refs ctx))
+          (str/join "\n"
+            (map (fn [s]
+                   (let [sql (or (:sql s) "")
+                         sql-preview (subs sql 0 (min 120 (count sql)))]
+                     (str "  - " (:symbol s) "\n"
+                          "    SQL: " sql-preview
+                          (when (< (count sql-preview) (count sql)) "..."))))
+                 (:sql-refs ctx)))
+          "  (なし)")
+        cov-txt
+        (if (seq (:coverage ctx))
+          (str/join "\n"
+            (map (fn [c]
+                   (str "  - " (:method c)
+                        "  [covered=" (:covered c)
+                        " missed=" (:missed c) "]"))
+                 (:coverage ctx)))
+          "  (情報なし)")
+        prompt
+        (str "以下は Java クラス " target " の静的解析情報です。\n"
+             "JUnit 5 + Mockito を使ったユニットテストコードを生成してください。\n\n"
+             "## 対象\n" target "\n\n"
+             "## 直接依存（Mock 候補）\n" deps-txt "\n\n"
+             "## SQL 縛り（MyBatis Mapper 経由）\n" sql-txt "\n\n"
+             "## JaCoCo カバレッジ（covered=0 = 完全未テスト）\n" cov-txt "\n\n"
+             "## 要件\n"
+             "- JUnit 5 (@Test, @ExtendWith(MockitoExtension.class))\n"
+             "- Mockito (@Mock, when(...).thenReturn(...))\n"
+             "- covered=0 のメソッドを優先してテストする\n"
+             "- SQL 縛りがある場合は Mapper の戻り値を Mock で制御するテストを含める\n"
+             "- 日本語コメントでテストの意図を説明する")]
+    (codegen/chat-complete
+     [{:role "system"
+       :content "あなたは Java の JUnit 5 + Mockito テストコードを生成する専門家です。与えられた静的解析情報を元に、実用的なテストコードを生成してください。"}
+      {:role "user"
+       :content prompt}]
+     :model (or model "openai/gpt-4.1"))))
