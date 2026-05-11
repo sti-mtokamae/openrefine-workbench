@@ -206,3 +206,90 @@
     (doseq [batch (partition-all 2000 docs)]
       (xt/execute-tx node (mapv #(vector :put-docs :refs %) batch)))
     (count docs)))
+
+;; -------------------------
+;; メソッドシグネチャ抽出（:jsigs テーブル）
+;; -------------------------
+
+(defn- method->sig-doc
+  "MethodDeclaration 1 件を :jsigs ドキュメントに変換する。"
+  [^MethodDeclaration md cls-name trial]
+  (let [mname   (.getNameAsString md)
+        params  (->> (.getParameters md)
+                     (mapv (fn [p]
+                             {:name (.getNameAsString p)
+                              :type (.asString (.getType p))})))
+        ;; オーバーロード識別用のパラメータ型リスト
+        ptypes  (str/join "," (map :type params))
+        ret     (.asString (.getType md))
+        throws  (->> (.getThrownExceptions md)
+                     (mapv #(.asString %)))
+        mods    (->> (.getModifiers md)
+                     (mapv #(-> % .getKeyword .asString)))]
+    {:xt/id         (str "jsig/" (or trial "_") "/" cls-name "/" mname "(" ptypes ")")
+     :jsig/trial    trial
+     :jsig/class    cls-name
+     :jsig/method   mname
+     :jsig/params   params
+     :jsig/return   ret
+     :jsig/throws   throws
+     :jsig/mods     mods}))
+
+(defn- extract-sigs-from-file
+  "1 つの .java ファイルを解析し、メソッドシグネチャドキュメントのシーケンスを返す。"
+  [^java.io.File f trial]
+  (try
+    (let [cu (StaticJavaParser/parse f)]
+      (->> (.findAll cu ClassOrInterfaceDeclaration)
+           (mapcat (fn [^ClassOrInterfaceDeclaration cls]
+                     (let [cls-name (.getNameAsString cls)]
+                       (->> (.findAll cls MethodDeclaration)
+                            (map #(method->sig-doc % cls-name trial))))))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println (str "[jsig] parse error: " (.getName f) " — " (.getMessage e))))
+      [])))
+
+(defn jsig!
+  "Java ソースのメソッドシグネチャを解析して XTDB :jsigs テーブルに取り込む（差分同期・冪等）。
+
+   paths: 解析対象パスのベクタ
+   opts:
+     :trial - トライアル識別子
+
+   例:
+     (jsig! node [\"trials/experiments/2026-04-28-tradehub/repo\"] :trial \"tradehub\")"
+  [node paths & {:keys [trial]}]
+  (let [docs    (->> paths
+                     (mapcat java-files)
+                     (mapcat #(extract-sigs-from-file % trial))
+                     vec)
+        new-ids (set (map :xt/id docs))
+        old-ids (->> (xt/q node '(from :jsigs [{:xt/id id :jsig/trial t}]))
+                     (filter #(= (:t %) trial))
+                     (map :id)
+                     set)
+        to-del  (set/difference old-ids new-ids)]
+    (when (seq to-del)
+      (xt/execute-tx node (mapv #(vector :delete :jsigs %) to-del)))
+    (doseq [batch (partition-all 2000 docs)]
+      (xt/execute-tx node (mapv #(vector :put-docs :jsigs %) batch)))
+    {:put (count docs) :delete (count to-del)}))
+
+(defn jsigs
+  "XTDB :jsigs テーブルからメソッドシグネチャを返す。
+   opts:
+     :trial  - トライアル識別子でフィルタ
+     :class  - クラス名（シンプル名）でフィルタ
+     :method - メソッド名でフィルタ
+
+   例:
+     (jsigs node :trial \"tradehub\" :class \"DocumentAggregateServiceImpl\")
+     (jsigs node :trial \"tradehub\" :class \"DocumentAggregateServiceImpl\"
+                                    :method \"resolveTargetProcessIds\")"
+  [node & {:keys [trial class method]}]
+  (let [rs (xt/q node '(from :jsigs [*]))]
+    (cond->> rs
+      trial  (filter #(= trial (:jsig/trial %)))
+      class  (filter #(= class (:jsig/class %)))
+      method (filter #(= method (:jsig/method %))))))

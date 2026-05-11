@@ -106,6 +106,30 @@
   [paths & {:keys [trial]}]
   (jref/jref! (node) paths :trial trial))
 
+(defn jsig!
+  "Java ソースのメソッドシグネチャを解析して XTDB :jsigs テーブルに取り込む（差分同期・冪等）。
+   jref! と同じパスを指定すること。
+
+   opts:
+     :trial - トライアル識別子
+
+   例:
+     (jsig! [\"trials/experiments/2026-04-28-tradehub/repo\"] :trial \"tradehub\")"
+  [paths & {:keys [trial]}]
+  (jref/jsig! (node) paths :trial trial))
+
+(defn jsigs
+  "XTDB :jsigs テーブルからメソッドシグネチャを返す。
+   opts:
+     :trial  - トライアル識別子でフィルタ
+     :class  - クラス名（シンプル名）でフィルタ
+     :method - メソッド名でフィルタ
+
+   例:
+     (jsigs :trial \"tradehub\" :class \"DocumentAggregateServiceImpl\")"
+  [& {:keys [trial cls method]}]
+  (jref/jsigs (node) :trial trial :class cls :method method))
+
 (defn sqlref!
   "Java ソースの MyBatis @Select 等アノテーション SQL を解析して
    XTDB :sql-refs テーブルに取り込む。
@@ -801,13 +825,14 @@
                        (filter #(= (:from %) (str class-name "/" method)))
                        (map :to) distinct vec)
                   (->> rs (map :to) distinct vec))
-        ;; SQL 縛り（このクラスが使う sqlref）
-        sqls    (->> (sqlrefs :trial trial)
-                     (filter #(str/starts-with? (:sqlref/class %) class-name))
+        ;; SQL 縛り（直接依存の Mapper メソッドの sqlref を引く）
+        all-sqls   (sqlrefs :trial trial)
+        direct-set (set direct)
+        sqls    (->> all-sqls
+                     (filter #(contains? direct-set (:sqlref/symbol %)))
                      (mapv (fn [r]
-                             (cond-> {:symbol     (:sqlref/symbol r)
-                                      :method     (:sqlref/method r)
-                                      :sql        (:sqlref/sql r)}
+                             (cond-> {:symbol (:sqlref/symbol r)
+                                      :method (:sqlref/method r)}
                                (seq (:sqlref/col-binds r))
                                (assoc :col-binds (:sqlref/col-binds r))
                                (seq (:sqlref/param-binds r))
@@ -822,13 +847,26 @@
                          :covered (:jacoco/covered r)
                          :missed  (:jacoco/missed r)
                          :line    (:jacoco/line r)})
-                      jac-flt)]
+                      jac-flt)
+        ;; メソッドシグネチャ（:jsigs から）
+        sigs    (jsigs :trial trial :cls class-name)
+        sigs-flt (if method
+                   (filter #(= method (:jsig/method %)) sigs)
+                   sigs)
+        signatures (mapv (fn [s]
+                           {:method  (:jsig/method s)
+                            :params  (:jsig/params s)
+                            :return  (:jsig/return s)
+                            :throws  (:jsig/throws s)
+                            :mods    (:jsig/mods s)})
+                         sigs-flt)]
     {:trial       trial
      :class       class-name
      :method      method
      :direct-deps direct
      :sql-refs    sqls
-     :coverage    cov}))
+     :coverage    cov
+     :signatures  signatures}))
 
 (defn gen-test
   "test-context の情報を AI に渡して JUnit 5 + Mockito テストコードを生成する。
@@ -857,11 +895,13 @@
         (if (seq (:sql-refs ctx))
           (str/join "\n"
             (map (fn [s]
-                   (let [sql (or (:sql s) "")
-                         sql-preview (subs sql 0 (min 120 (count sql)))]
-                     (str "  - " (:symbol s) "\n"
-                          "    SQL: " sql-preview
-                          (when (< (count sql-preview) (count sql)) "..."))))
+                   (str "  - " (:symbol s)
+                        (when (seq (:col-binds s))
+                          (str "\n    col-binds: "
+                               (str/join ", " (map #(str (:lhs %) "=" (:rhs %)) (:col-binds s)))))
+                        (when (seq (:param-binds s))
+                          (str "\n    param-binds: "
+                               (str/join ", " (map #(str (:col %) "=#{" (:param %) "}") (:param-binds s)))))))
                  (:sql-refs ctx)))
           "  (なし)")
         cov-txt
@@ -873,10 +913,26 @@
                         " missed=" (:missed c) "]"))
                  (:coverage ctx)))
           "  (情報なし)")
+        sig-txt
+        (if (seq (:signatures ctx))
+          (str/join "\n"
+            (map (fn [s]
+                   (let [params-str (str/join ", "
+                                     (map #(str (:type %) " " (:name %))
+                                          (:params s)))]
+                     (str "  - " (str/join " " (:mods s))
+                          " " (:return s)
+                          " " (:method s)
+                          "(" params-str ")"
+                          (when (seq (:throws s))
+                            (str " throws " (str/join ", " (:throws s)))))))
+                 (:signatures ctx)))
+          "  (情報なし)")
         prompt
         (str "以下は Java クラス " target " の静的解析情報です。\n"
              "JUnit 5 + Mockito を使ったユニットテストコードを生成してください。\n\n"
              "## 対象\n" target "\n\n"
+             "## メソッドシグネチャ\n" sig-txt "\n\n"
              "## 直接依存（Mock 候補）\n" deps-txt "\n\n"
              "## SQL 縛り（MyBatis Mapper 経由）\n" sql-txt "\n\n"
              "## JaCoCo カバレッジ（covered=0 = 完全未テスト）\n" cov-txt "\n\n"
