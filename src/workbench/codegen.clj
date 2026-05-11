@@ -89,8 +89,8 @@
                    .build)
         resp   (.send @http-client req (HttpResponse$BodyHandlers/ofString))
         code   (.statusCode resp)
-        result (json/parse-string (.body resp) true)]
+        raw    (.body resp)]
     (if (= 200 code)
-      (-> result :choices first :message :content)
+      (-> (json/parse-string raw true) :choices first :message :content)
       (throw (ex-info "GitHub Models API error"
-                      {:status code :body result})))))
+                      {:status code :body raw})))))
