@@ -948,3 +948,83 @@
       {:role "user"
        :content prompt}]
      :model (or model "openai/gpt-4.1"))))
+
+;; -------------------------
+;; 一括テスト生成支援
+;; -------------------------
+
+(defn uncovered-sql-methods
+  "未カバー（covered=0）かつ SQL 縛りがあるメソッドを全件洗い出す。
+
+   アルゴリズム:
+     1. sqlrefs から Mapper シンボルセットを取得
+     2. jrefs から 直接依存マップ（from → #{to}）を構築
+     3. jacocos で covered=0 のメソッドを列挙
+     4. 直接依存に Mapper シンボルが含まれるものを抽出
+
+   opts:
+     :trial - トライアル識別子
+
+   戻り値: [{:class cls :method method :sql-deps [mapper-sym ...]} ...]
+
+   例:
+     (uncovered-sql-methods :trial \"tradehub\")"
+  [& {:keys [trial]}]
+  (let [sql-syms (->> (sqlrefs :trial trial)
+                      (map :sqlref/symbol)
+                      set)
+        dep-map  (->> (jrefs :trial trial :exclude-test true)
+                      (reduce (fn [m {:keys [from to]}]
+                                (update m from (fnil conj #{}) to))
+                              {}))
+        uncov    (jacocos :trial trial :uncovered? true)]
+    (->> uncov
+         (keep (fn [j]
+                 (let [cls    (:jacoco/class-simple j)
+                       method (:jacoco/method j)
+                       sym    (str cls "/" method)
+                       deps   (get dep-map sym #{})
+                       sqls   (filterv #(contains? sql-syms %) deps)]
+                   (when (seq sqls)
+                     {:class    cls
+                      :method   method
+                      :sql-deps sqls}))))
+         vec)))
+
+(defn gen-tests-uncovered
+  "未カバー×SQL縛りのメソッドを全件洗い出し、gen-test でテストコードを生成する。
+
+   各メソッドについて gen-test を呼び出し、結果を返す。
+   :out-dir を指定するとクラス名ごとにファイルへ書き出す:
+     <out-dir>/<ClassName>/<method>.md
+
+   opts:
+     :trial   - トライアル識別子
+     :model   - 使用モデル (default: \"openai/gpt-4.1\")
+     :out-dir - 出力ディレクトリ（nil のとき書き出しなし）
+     :dry-run - true のとき gen-test を呼ばず候補一覧だけ返す
+
+   戻り値:
+     :dry-run true  → [{:class :method :sql-deps} ...]
+     :dry-run false → [{:class :method :sql-deps :code} ...]
+
+   例:
+     (gen-tests-uncovered :trial \"tradehub\" :dry-run true)
+     (gen-tests-uncovered :trial \"tradehub\" :out-dir \"/tmp/gen-tests\")
+     (gen-tests-uncovered :trial \"tradehub\" :model \"openai/gpt-4o\")"
+  [& {:keys [trial model out-dir dry-run] :or {dry-run false}}]
+  (let [candidates (uncovered-sql-methods :trial trial)]
+    (println (str "[gen-tests-uncovered] 候補: " (count candidates) " メソッド"))
+    (if dry-run
+      candidates
+      (mapv (fn [{:keys [class method sql-deps] :as c}]
+              (println (str "  生成中: " class "/" method " ..."))
+              (let [code (gen-test class :trial trial :method method :model model)
+                    result (assoc c :code code)]
+                (when out-dir
+                  (let [dir  (str out-dir "/" class)
+                        path (str dir "/" method ".md")]
+                    (.mkdirs (java.io.File. dir))
+                    (spit path (str "# " class "/" method "\n\n```java\n" code "\n```\n"))))
+                result))
+            candidates))))
