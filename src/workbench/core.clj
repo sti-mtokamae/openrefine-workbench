@@ -12,6 +12,7 @@
   (:require
    [clojure.string      :as str]
    [workbench.ingest    :as ingest]
+   [workbench.jacoco    :as jacoco]
    [workbench.jref      :as jref]
    [workbench.query     :as query]   [workbench.sqlref    :as sqlref]   [workbench.visualize :as visualize]
    [xtdb.api            :as xt]
@@ -126,6 +127,62 @@
      (sqlrefs :trial \"tradehub\")"
   [& {:keys [trial]}]
   (sqlref/sqlrefs (node) :trial trial))
+
+(defn jacoco!
+  "JaCoCo XML レポートを解析して XTDB :jacoco テーブルに取り込む（差分同期・冪等）。
+
+   xml-path: jacoco.xml のファイルパス（文字列）
+   opts:
+     :trial - トライアル識別子
+
+   例:
+     (jacoco! \"/tmp/jacoco-report/jacoco.xml\" :trial \"tradehub\")"
+  [xml-path & {:keys [trial]}]
+  (jacoco/jacoco! (node) xml-path :trial trial))
+
+(defn jacocos
+  "XTDB :jacoco テーブルから全レコードを返す。
+   opts:
+     :trial      - トライアル識別子でフィルタ
+     :class      - クラス名（シンプル名）でフィルタ
+     :uncovered? - true のとき covered=0 のメソッドのみ返す
+
+   例:
+     (jacocos :trial \"tradehub\")
+     (jacocos :trial \"tradehub\" :uncovered? true)
+     (jacocos :trial \"tradehub\" :class \"DocumentAggregateServiceImpl\")"
+  [& {:keys [trial class uncovered?]}]
+  (jacoco/jacocos (node) :trial trial :class class :uncovered? uncovered?))
+
+(defn coverage
+  "クラス名（シンプル名）のカバレッジサマリを返す。
+   :covered-methods / :total-methods / :covered-lines / :total-lines を付与。
+   opts:
+     :trial      - トライアル識別子
+     :uncovered? - true のとき covered-methods=0 のクラスのみ返す
+
+   例:
+     (coverage :trial \"tradehub\")
+     (coverage :trial \"tradehub\" :uncovered? true)"
+  [& {:keys [trial uncovered?]}]
+  (let [rs      (jacocos :trial trial)
+        grouped (group-by :jacoco/class-simple rs)
+        rows    (->> grouped
+                     (map (fn [[cls methods]]
+                            (let [total-m   (count methods)
+                                  covered-m (count (filter #(pos? (:jacoco/covered %)) methods))
+                                  total-l   (reduce + (map #(+ (:jacoco/covered %) (:jacoco/missed %)) methods))
+                                  covered-l (reduce + (map :jacoco/covered methods))]
+                              {:class           cls
+                               :covered-methods covered-m
+                               :total-methods   total-m
+                               :covered-lines   covered-l
+                               :total-lines     total-l})))
+                     (sort-by :covered-lines))]
+    (if uncovered?
+      (filter #(zero? (:covered-methods %)) rows)
+      rows)))
+
 ;; -------------------------
 ;; query
 ;; -------------------------
