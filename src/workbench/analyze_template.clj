@@ -357,6 +357,66 @@
   (catch Exception ex
     (println (str "  [WARN] フェーズ 9 failed: " (ex-message ex)))))
 
+;; =============================================================================
+;; フェーズ 10: テスト生成候補の洗い出し + AI テスト生成
+;;
+;; JaCoCo 未カバー（covered=0）× SQL 縛りありのメソッドを全件洗い出し、
+;; GitHub Models API 経由で JUnit 5 + Mockito テストコードを生成する。
+;;
+;; 前提: 以下がすでに XTDB に投入済みであること
+;;   - jrefs  (フェーズ 1)
+;;   - sqlrefs (フェーズ 6)
+;;   - jacocos — (core/jacoco! "/path/to/jacoco.xml" :trial trial-name) で投入済み
+;;   - jsigs  — (core/jsig! src-dirs :trial trial-name) で投入済み
+;;
+;; ★ STEP A: シグネチャ投入（初回のみ・冪等）
+;;   (core/jsig! src-dirs :trial trial-name)
+;;
+;; ★ STEP B: JaCoCo 投入（初回のみ・冪等）
+;;   (core/jacoco! "/path/to/jacoco.xml" :trial trial-name)
+;;
+;; ★ STEP C: 候補確認（dry-run=true → API 呼び出しなし）
+;; ★ STEP D: 実際に生成（:out-dir 指定でファイル書き出し）
+;; =============================================================================
+
+(println "\n=== フェーズ 10: テスト生成候補 ===")
+(try
+  ;; --- STEP A: jsig! でメソッドシグネチャを投入 ---
+  (println "\n--- jsig! (メソッドシグネチャ投入) ---")
+  (let [n (core/jsig! src-dirs :trial trial-name)]
+    (println (str "  jsigs: " n)))
+
+  ;; --- STEP B: 候補一覧（干実行） ---
+  (println "\n--- uncovered-sql-methods (dry-run) ---")
+  (let [candidates (core/uncovered-sql-methods :trial trial-name)]
+    (println (str "  候補メソッド数: " (count candidates)))
+    (println (str "  対象クラス数:   "
+                  (count (distinct (map :class candidates)))))
+
+    ;; クラス別サマリ
+    (println "\n  --- クラス別内訳 ---")
+    (doseq [[cls ms] (->> candidates
+                           (group-by :class)
+                           (sort-by (comp count second) >))]
+      (println (format "  %-50s %2d メソッド" cls (count ms)))))
+
+  ;; --- STEP C: 実際に生成する場合 ---
+  ;; ★ 以下のコメントを外して実行する（API が呼ばれるため時間がかかる）
+  ;; ★ :out-dir を指定するとクラス別ディレクトリにファイルが書き出される
+  ;;
+  ;; (println "\n--- gen-tests-uncovered ---")
+  ;; (let [results (core/gen-tests-uncovered
+  ;;                :trial   trial-name
+  ;;                ;; :model "openai/gpt-4.1"
+  ;;                :out-dir (str "trials/experiments/"
+  ;;                              trial-name "/gen-tests"))]
+  ;;   (println (str "  生成完了: " (count results) " メソッド"))
+  ;;   (doseq [{:keys [class method]} results]
+  ;;     (println (str "    " class "/" method))))
+
+  (catch Exception ex
+    (println (str "  [WARN] フェーズ 10 failed: " (ex-message ex)))))
+
 (core/stop!)
 
 (core/stop!)
