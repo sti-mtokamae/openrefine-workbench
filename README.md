@@ -54,11 +54,15 @@ ingest → query → visualize
 ├── src/
 │   ├── openrefine_runner.clj  # OpenRefine API クライアント
 │   └── workbench/
-│       ├── core.clj           # REPL / AI Agent 統合エントリポイント
-│       ├── ingest.clj         # dir! / xref! — XTDB への取り込み
-│       ├── jref.clj           # jref!  — Java xref 解析（JavaParser）
-│       ├── query.clj          # q      — XTDB クエリ薄ラッパー
-│       └── visualize.clj      # tree / call-tree / gexf — 結果の可視化
+│       ├── analyze_template.clj  # 分析フェーズ 1〜10 のテンプレートスクリプト
+│       ├── core.clj              # REPL / AI Agent 統合エントリポイント
+│       ├── codegen.clj           # GitHub Models API クライアント（gen-test）
+│       ├── ingest.clj            # dir! / xref! / cochange! — XTDB への取り込み
+│       ├── jacoco.clj            # jacoco! / jacocos — JaCoCo XML 取り込み
+│       ├── jref.clj              # jref! / jsig! — Java xref + シグネチャ解析
+│       ├── query.clj             # q      — XTDB クエリ薄ラッパー
+│       ├── sqlref.clj            # sqlref! / sqlrefs — MyBatis SQL 解析
+│       └── visualize.clj         # tree / call-tree / gexf — 結果の可視化
 ├── test/
 │   └── smoke_test.clj
 ├── docs/
@@ -100,6 +104,14 @@ guix shell -m manifest.scm -- clojure -A:xtdb:repl
 (core/fan-in)                      ; 被依存数降順
 (core/hotspots)                    ; fan-in 上位 10
 (core/hotspots 5)                  ; 上位 5
+
+;; AI テスト生成（GitHub Models API 使用）
+(core/jsig! ["trials/experiments/xxx/repo"] :trial "my-project")
+(core/jacoco! "/path/to/jacoco.xml" :trial "my-project")
+(core/uncovered-sql-methods :trial "my-project")  ; dry-run: 候補一覧
+(core/gen-test "FooServiceImpl" :trial "my-project" :method "doSomething")
+(core/gen-tests-uncovered :trial "my-project"      ; 全件生成
+                          :out-dir "/tmp/gen-tests")
 (core/stop!)
 ```
 
@@ -154,14 +166,24 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `ingest!` — ファイルツリー → `:files` | ✅ |
 | `xref!` — Clojure cross-reference → `:refs` | ✅ |
 | `jref!` — Java cross-reference → `:refs`（JavaParser） | ✅ |
+| `jsig!` / `jsigs` — Java メソッドシグネチャ → `:jsigs`（型付き） | ✅ |
+| `sqlref!` / `sqlrefs` — MyBatis SQL アノテーション → `:sql-refs` | ✅ |
+| `jacoco!` / `jacocos` / `coverage` — JaCoCo XML → `:jacoco` | ✅ |
+| `cochange!` / `cochanges` — Git 共変更履歴 → `:cochanges` | ✅ |
 | `q` — XTQL クエリ | ✅ |
 | `tree` / `tree-str` — ツリー表示 | ✅ |
 | `refs` — 内部呼び出しグラフ（ノイズフィルタ付き） | ✅ |
 | `call-tree` / `call-tree-str` — 呼び出し木表示 | ✅ |
 | `fan-out` / `fan-in` / `hotspots` — 依存メトリクス | ✅ |
 | `impact` / `deps` / `neighborhood` — ピンポイント影響分析 | ✅ |
+| `sql-impact` / `sql-impact-report` — SQL 縛り影響分析 | ✅ |
+| `sql-cochange-check` — 静的解析 × git 履歴 照合 | ✅ |
 | `export-gexf!` — GEXF エクスポート（Gephi / Cytoscape 連携） | ✅ |
 | `bin/analyze` — 解析ショートカット CLI | ✅ |
+| `test-context` — クラス/メソッドのテスト生成コンテキスト構築 | ✅ |
+| `gen-test` — GitHub Models API 経由 JUnit 5 テスト生成 | ✅ |
+| `uncovered-sql-methods` — 未カバー × SQL 縛りメソッド一覧 | ✅ |
+| `gen-tests-uncovered` — 候補全件の一括テスト生成 | ✅ |
 
 ### OpenRefine trial ワークフロー
 
