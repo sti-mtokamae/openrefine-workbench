@@ -36,6 +36,15 @@ REPL / AI Agent 向けの統合エントリポイント。
 | `(core/export-gexf! refs path)` | refs を GEXF ファイルとして出力（Gephi / Cytoscape 用） |
 | `(core/export-gexf! refs path :level :class)` | クラス単位に集約（推奨。千クラス規模でも Gephi が軽い） |
 | `(core/export-gexf! refs path :level :method)` | メソッド単位（デフォルト） |
+| `(core/export-graphml! refs path)` | refs を GraphML ファイルとして出力（Cytoscape 向け） |
+| `(core/export-graphml! refs path :level :class)` | クラス単位に集約 |
+| `(core/export-cytoscape-csv! refs prefix)` | Cytoscape 向け CSV 2 枚（`-edges.csv` / `-nodes.csv`）を出力 |
+| `(core/jrefs)` | Java xref クエリ（ノイズフィルタ済み） |
+| `(core/jrefs :trial t)` | trial でフィルタ |
+| `(core/jrefs :trial t :exclude-test true)` | テストクラスを除外 |
+| `(core/jrefs :trial t :prefix cls)` | 呼び出し元クラス名前方一致でフィルタ |
+| `(core/topo-sort)` | クラス依存順トポロジカルソート（切り出し順推定） |
+| `(core/topo-sort :rs jrefs)` | 任意の jrefs を渡してソート |
 
 ### 使用例
 
@@ -91,6 +100,19 @@ REPL / AI Agent 向けの統合エントリポイント。
 (core/export-gexf! (core/jrefs :trial "my-trial") "exports/graph.gexf" :level :class)
 ;; メソッド単位（ファイルが大きい。局所ビュー向け）
 (core/export-gexf! (core/jrefs :trial "my-trial") "exports/graph-method.gexf")
+;; GraphML エクスポート（Cytoscape 推奨）
+(core/export-graphml! (core/jrefs :trial "my-trial") "exports/graph.graphml" :level :class)
+;; Cytoscape CSV（GraphML が読み込めない場合の代替）
+(core/export-cytoscape-csv! (core/jrefs :trial "my-trial") "exports/graph" :level :class)
+
+;; Java xref クエリ（ノイズフィルタ・テスト除外・クラス前方一致）
+(core/jrefs :trial "my-trial")
+(core/jrefs :trial "my-trial" :exclude-test true)
+(core/jrefs :trial "my-trial" :prefix "OrderServiceImpl")
+
+;; トポロジカルソート（葉クラスから根クラスへの切り出し順）
+(core/topo-sort)
+(core/topo-sort :rs (core/jrefs :trial "my-trial" :exclude-test true))
 
 ;; ツリー表示
 (core/tree)
@@ -407,25 +429,48 @@ JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届
 ### 使用例
 
 ```clojure
+;; 前提: メソッドシグネチャを投入する（差分同期・冪等）
+(core/jsig! ["trials/experiments/xxx/repo"] :trial "tradehub")
+;; => {:put 3415, :delete 0}
+
+;; シグネチャをクエリ
+(core/jsigs :trial "tradehub" :cls "DocumentAggregateServiceImpl")
+;; => [{:jsig/method "resolveTargetProcessId"
+;;      :jsig/params [{:name "documents" :type "List<DocumentsEntity>"}]
+;;      :jsig/return "UUID" :jsig/throws [] :jsig/mods ["private"]} ...]
+
 ;; コンテキストを確認してから生成
-(test-context "DocumentAggregateServiceImpl" :trial "tradehub")
+(core/test-context "DocumentAggregateServiceImpl" :trial "tradehub")
 ;; => {:trial "tradehub"
 ;;     :class "DocumentAggregateServiceImpl"
 ;;     :method nil
 ;;     :direct-deps ["DocumentAggregateMapper/getAggregatableDocumentTypes" ...]
 ;;     :sql-refs    [{:symbol "..." :col-binds [...] :param-binds [...]} ...]
-;;     :coverage    [{:method "resolveTargetProcessIds" :covered 0 :missed 15 :line 42} ...]}
+;;     :coverage    [{:method "resolveTargetProcessIds" :covered 0 :missed 15 :line 42} ...]
+;;     :signatures  [{:method "resolveTargetProcessId"
+;;                    :params [{:name "documents" :type "List<DocumentsEntity>"}]
+;;                    :return "UUID" :throws [] :mods ["private"]} ...]}
 
 ;; テストコードを生成（クラス全体）
-(println (gen-test "DocumentAggregateServiceImpl" :trial "tradehub"))
+(println (core/gen-test "DocumentAggregateServiceImpl" :trial "tradehub"))
 
 ;; 特定メソッドだけ
-(println (gen-test "DocumentAggregateServiceImpl" :trial "tradehub"
-                   :method "resolveTargetProcessIds"))
+(println (core/gen-test "DocumentAggregateServiceImpl" :trial "tradehub"
+                        :method "resolveTargetProcessId"))
 
 ;; モデルを指定
-(println (gen-test "DocumentAggregateServiceImpl" :trial "tradehub"
-                   :model "openai/gpt-4.1-mini"))
+(println (core/gen-test "DocumentAggregateServiceImpl" :trial "tradehub"
+                        :model "openai/gpt-4.1-mini"))
+
+;; 未カバー × SQL 縛りのメソッドを全件洗い出す（dry-run: API 呼び出しなし）
+(core/uncovered-sql-methods :trial "tradehub")
+;; => [{:class "GenericMasterCsvServiceImpl"
+;;      :method "importCsvFilesToStagingTables"
+;;      :sql-deps ["GenericMasterImportMapper/createGenericMasterImportStagingFile"]} ...]
+
+;; 全件一括生成（:out-dir を指定するとファイル書き出し）
+(core/gen-tests-uncovered :trial "tradehub"
+                          :out-dir "trials/experiments/2026-04-28-tradehub/gen-tests")
 
 ;; 低レベル API（任意のプロンプト）
 (require '[workbench.codegen :as cg])
@@ -440,12 +485,29 @@ JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届
 | `:direct-deps` | このクラス（メソッド）が直接呼び出す依存先シンボル（Mock 候補） |
 | `:sql-refs` | 依存先 Mapper メソッドの SQL 縛り情報（`:col-binds` / `:param-binds`） |
 | `:coverage` | JaCoCo カバレッジ（`:covered 0` = 完全未テスト） |
+| `:signatures` | メソッドシグネチャ（`jsig!` 投入済みの場合に付与。型推定精度が向上する） |
+
+### `:jsigs` テーブルスキーマ（`jsig!` で投入）
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `:jsig/trial` | string | トライアル識別子 |
+| `:jsig/class` | string | シンプルクラス名（`:refs` との照合用） |
+| `:jsig/method` | string | メソッド名 |
+| `:jsig/params` | `[{:name :type}]` | パラメータ一覧（名前 + 型） |
+| `:jsig/return` | string | 戻り値型 |
+| `:jsig/throws` | `[string]` | throws 節の例外型一覧 |
+| `:jsig/mods` | `[string]` | アクセス修飾子（`"public"` / `"private"` など） |
 
 ### AI に渡されるプロンプト構成
 
 ```
 ## 対象
 <クラス名>[/<メソッド名>]
+
+## メソッドシグネチャ
+  - private UUID resolveTargetProcessId(List<DocumentsEntity> documents)
+  - ...
 
 ## 直接依存（Mock 候補）
   - DocumentAggregateMapper/getAggregatableDocumentTypes
@@ -467,3 +529,12 @@ JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届
 - SQL 縛りがある場合は Mapper の戻り値を Mock で制御するテストを含める
 - 日本語コメントでテストの意図を説明する
 ```
+
+### `gen-tests-uncovered` オプション
+
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| `:trial` | — | トライアル識別子 |
+| `:model` | `"openai/gpt-4.1"` | 使用する GitHub Models モデル |
+| `:out-dir` | `nil` | 指定すると `<out-dir>/<ClassName>/<method>.md` に書き出す |
+| `:dry-run` | `false` | `true` のとき API を呼ばず候補一覧だけ返す |

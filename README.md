@@ -166,19 +166,23 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `ingest!` — ファイルツリー → `:files` | ✅ |
 | `xref!` — Clojure cross-reference → `:refs` | ✅ |
 | `jref!` — Java cross-reference → `:refs`（JavaParser） | ✅ |
+| `jrefs` — Java xref クエリ（ノイズフィルタ・試験スコープ・exclude-test） | ✅ |
 | `jsig!` / `jsigs` — Java メソッドシグネチャ → `:jsigs`（型付き） | ✅ |
 | `sqlref!` / `sqlrefs` — MyBatis SQL アノテーション → `:sql-refs` | ✅ |
 | `jacoco!` / `jacocos` / `coverage` — JaCoCo XML → `:jacoco` | ✅ |
 | `cochange!` / `cochanges` — Git 共変更履歴 → `:cochanges` | ✅ |
 | `q` — XTQL クエリ | ✅ |
 | `tree` / `tree-str` — ツリー表示 | ✅ |
-| `refs` — 内部呼び出しグラフ（ノイズフィルタ付き） | ✅ |
+| `refs` / `jrefs` — 呼び出しグラフ（Clojure / Java、ノイズフィルタ付き） | ✅ |
 | `call-tree` / `call-tree-str` — 呼び出し木表示 | ✅ |
+| `topo-sort` — クラス依存順トポロジカルソート（切り出し順推定） | ✅ |
 | `fan-out` / `fan-in` / `hotspots` — 依存メトリクス | ✅ |
 | `impact` / `deps` / `neighborhood` — ピンポイント影響分析 | ✅ |
-| `sql-impact` / `sql-impact-report` — SQL 縛り影響分析 | ✅ |
+| `sql-impact` / `sql-impact-report` / `sql-impact-report-multi` — SQL 縛り影響分析 | ✅ |
 | `sql-cochange-check` — 静的解析 × git 履歴 照合 | ✅ |
 | `export-gexf!` — GEXF エクスポート（Gephi / Cytoscape 連携） | ✅ |
+| `export-graphml!` — GraphML エクスポート（Cytoscape 向け） | ✅ |
+| `export-cytoscape-csv!` — Cytoscape CSV エクスポート（GraphML 代替） | ✅ |
 | `bin/analyze` — 解析ショートカット CLI | ✅ |
 | `test-context` — クラス/メソッドのテスト生成コンテキスト構築 | ✅ |
 | `gen-test` — GitHub Models API 経由 JUnit 5 テスト生成 | ✅ |
