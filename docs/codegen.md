@@ -266,3 +266,215 @@ assertEquals(ProcessStatus.COMPLETED, result.get(0).getStatus());
 | 同クラスの複数メソッドが別ファイルに分割 | `gen-tests-uncovered` はメソッド単位で出力 | 手動でクラス単位に統合 |
 | メソッドボディなし → Mock 設定が浅い | `jsig!` はシグネチャのみ取得 | メソッド本体を参照して補完 |
 | `private` メソッドのテストが冗長になる | アクセス制御を無視して骨格生成 | Reflection を使うか public メソッド経由で間接テスト |
+
+---
+
+## ディレクトリレイアウトの意図（exports/ vs repo/）
+
+テストスケルトンは **2 か所** に置かれます。
+
+| パス | 役割 |
+|---|---|
+| `exports/gen-tests/<クラス名>/<メソッド名>.md` | AI 生成物のアーカイブ（素材）。再生成の比較・ロールバック用 |
+| `repo/.../src/test/java/.../XxxTest.java` | Maven が実行する修正済みコード（成果物） |
+
+分離の理由：
+- `.md` は人間・AI が手を入れる前の「素材」。試行ごとに保存しておくことでモデル変更や prompt 改善の効果を比較できる。
+- 修正済み `.java` は Maven が直接実行する成果物。`.md` との差分が「AI エージェントが補った量」の記録になる。
+
+---
+
+## スケルトン → テストパスまでの実践ガイド
+
+### ステップ 1：.md からコードブロックを抽出する
+
+生成ファイルは Markdown のコードブロック（` ```java ` ）内に Java コードが入っています。
+
+```bash
+# コードブロック部分だけを取り出す（``` 行を除く）
+awk '/^```java/{p=1;next} /^```/{p=0} p' DocumentAggregateServiceImplTest.md \
+  > DocumentAggregateServiceImplTest.java
+```
+
+### ステップ 2：パッケージ宣言を実ソースと照合して修正する
+
+生成コードは `package your.package;` の仮置きです。
+
+```bash
+# テスト対象クラスのパッケージ名を確認
+head -3 repo/.../DocumentAggregateServiceImpl.java
+# → package com.tradehub.web.subtotal.service.impl;
+```
+
+テストのパッケージは通常 **同じパッケージ**（`@InjectMocks` でパッケージプライベートメンバーにアクセスするため）。
+
+```java
+// 修正前
+package your.package;
+
+// 修正後
+package com.tradehub.web.subtotal.service.impl;
+```
+
+### ステップ 3：Mock の型・Mapper 戻り値型を実ソースと照合して修正する
+
+AI は戻り値型を推測します。Mapper インターフェースの実際の戻り値型と一致しているか確認してください。
+
+```bash
+# Mapper の戻り値型を確認
+grep -n "List\|Optional\|Integer\|UUID" DocumentAggregateMapper.java
+```
+
+よくある不一致：
+
+| AI の推測 | 実際 |
+|---|---|
+| `List<Map<String, Object>>` | `List<DocumentAggregateEntity>` |
+| `int` | `Integer` |
+| `String` | `UUID` |
+
+### ステップ 4：テストディレクトリに配置する
+
+テスト対象クラスのパッケージパスと **同じディレクトリ構造** に置くことで、パッケージプライベートメンバーへのアクセスが有効になります。
+
+```
+src/test/java/com/tradehub/web/subtotal/service/impl/
+  DocumentAggregateServiceImplTest.java
+```
+
+### ステップ 5：mvn test を実行する
+
+```bash
+# Java 21 + cglib の場合は MAVEN_OPTS 必須
+MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED" \
+  guix shell 'openjdk@21:jdk' maven -- \
+  mvn test -pl common-lib -Dtest=DocumentAggregateServiceImplTest
+```
+
+---
+
+## 典型エラーと対処
+
+### `UnnecessaryStubbingException`
+
+```
+org.mockito.exceptions.misusing.UnnecessaryStubbingException:
+  Unnecessary stubbings detected.
+    1. -> at ...Test.java:42
+```
+
+**原因**: 早期リターンするテストメソッド内で、実際には呼ばれない `when(...).thenReturn(...)` が残っている。  
+**対処**: エラー行を確認し、そのスタブ行を削除する。
+
+```java
+// 削除対象（早期リターンのため呼ばれない）
+when(doc.getProjectId()).thenReturn(projectId);
+```
+
+### `InaccessibleObjectException`（cglib × Java 21）
+
+```
+java.lang.reflect.InaccessibleObjectException:
+  Unable to make ... accessible: module java.base does not "opens java.lang" to ...
+```
+
+**対処**:
+
+```bash
+export MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED"
+```
+
+### `javac: command not found`（guix の JRE のみ問題）
+
+```bash
+# NG: JRE のみ（javac なし）
+guix shell openjdk@21 maven
+
+# OK: JDK 込み
+guix shell 'openjdk@21:jdk' maven
+```
+
+---
+
+## AI エージェントへの渡し方
+
+テストをパスさせる作業を AI エージェント（GitHub Copilot Agent Mode 等）に委任するときのテクニックです。
+
+### 作業の分解
+
+| 作業 | AI に任せる | 人間が行う |
+|---|---|---|
+| パッケージ宣言の修正 | ✅（実ソース参照） | |
+| `import` 文の補完 | ✅（IDE 自動補完 or 参照） | |
+| Mock の型・戻り値型の修正 | ✅（実ソース照合） | |
+| `UnnecessaryStubbingException` の修正 | ✅（エラー → 行削除） | |
+| `expected` 値の決定 | | ✅（仕様確認） |
+| `private` メソッドのテスト方針 | | ✅（設計判断） |
+
+### プロンプトテンプレート
+
+```
+以下のテストスケルトンを修正して mvn test を通してください。
+
+## テストスケルトン
+[.md から抽出した Java コード]
+
+## テスト対象クラスのパス
+trials/experiments/2026-04-28-tradehub/repo/common-lib/src/main/java/.../DocumentAggregateServiceImpl.java
+
+## 依存 Mapper のパス
+trials/experiments/2026-04-28-tradehub/repo/common-lib/src/main/java/.../DocumentAggregateMapper.java
+
+## 配置先
+trials/experiments/2026-04-28-tradehub/repo/common-lib/src/test/java/.../DocumentAggregateServiceImplTest.java
+
+## 実行コマンド
+MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED" \
+  guix shell 'openjdk@21:jdk' maven -- \
+  mvn test -pl common-lib -Dtest=DocumentAggregateServiceImplTest
+
+## 指示
+1. パッケージ宣言を実ソースと照合して修正する
+2. Mock の型・Mapper 戻り値型を実 Mapper インターフェースと照合して修正する
+3. ファイルを配置先に書き込む
+4. mvn test を実行する
+5. エラーがあれば修正して再実行する（最大 3 回）
+6. expected 値が /* expected */ のままのテストは残したままで OK
+```
+
+### エージェントにエラーを渡すときのコツ
+
+- **エラーメッセージはそのまま貼る**。要約せず、スタックトレース全文を渡すと原因特定が速い。
+- **「最大 N 回」を明示する**。ループ修正が必要な作業では試行回数の上限を与えることで無限ループを防ぐ。
+- **修正スコープを絞る**。「このファイルだけ修正して」と対象を限定することで、意図しないファイルの書き換えを防ぐ。
+- **実ソースのパスを渡す**。AI は「参照すべきファイル」を明示されると型照合の精度が上がる。
+
+---
+
+## カバレッジ増幅サイクル
+
+```
+jacoco.xml
+    │
+    ▼
+jacoco!                     ← XTDB に取り込み（差分同期・冪等）
+    │
+    ▼
+uncovered-sql-methods        ← 未カバー × SQL 縛りを一覧
+    │
+    ▼
+gen-tests-uncovered          ← .md を一括生成（exports/gen-tests/）
+    │
+    ▼
+AI エージェントで修正         ← パッケージ修正・型照合・mvn test
+    │
+    ▼
+テストパス → mvn verify → jacoco.xml 再生成
+    │
+    └──────────────────────→ jacoco! で差分更新 → 繰り返し
+```
+
+**効率の目安**:
+- `uncovered-sql-methods` で候補を絞ることで、数百メソッドの中から「今すぐテストを書ける」ものだけに集中できる。
+- AI エージェントへの 1 回の指示でクラス単位（10〜20 メソッド）のテストが通れば、カバレッジカウントの増幅は現実的。
+- `jacoco!` は冪等なので、何度再実行してもデータが壊れない。
