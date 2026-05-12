@@ -421,6 +421,8 @@ JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届
 
 静的解析情報（`:refs` × `:sqlrefs` × `:jacoco`）を統合して、GitHub Models API 経由で JUnit 5 + Mockito テストコードを生成する。
 
+> コンセプト・データフロー・プロンプト構成・制約・使い方手順は [docs/codegen.md](codegen.md) を参照。
+
 ### 認証
 
 `GITHUB_TOKEN` 環境変数を優先し、なければ `gh auth token` で自動取得する。  
@@ -498,37 +500,6 @@ JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届
 | `:jsig/return` | string | 戻り値型 |
 | `:jsig/throws` | `[string]` | throws 節の例外型一覧 |
 | `:jsig/mods` | `[string]` | アクセス修飾子（`"public"` / `"private"` など） |
-
-### AI に渡されるプロンプト構成
-
-```
-## 対象
-<クラス名>[/<メソッド名>]
-
-## メソッドシグネチャ
-  - private UUID resolveTargetProcessId(List<DocumentsEntity> documents)
-  - ...
-
-## 直接依存（Mock 候補）
-  - DocumentAggregateMapper/getAggregatableDocumentTypes
-  - ...
-
-## SQL 縛り（MyBatis Mapper 経由）
-  - DocumentAggregateMapper/getAggregatableDocumentTypes
-    col-binds: p.project_id=cp.project_id, ...
-    param-binds: processId=#{context.processId}, ...
-
-## JaCoCo カバレッジ（covered=0 = 完全未テスト）
-  - resolveTargetProcessIds  [covered=0 missed=15]
-  - ...
-
-## 要件
-- JUnit 5 (@Test, @ExtendWith(MockitoExtension.class))
-- Mockito (@Mock, when(...).thenReturn(...))
-- covered=0 のメソッドを優先してテストする
-- SQL 縛りがある場合は Mapper の戻り値を Mock で制御するテストを含める
-- 日本語コメントでテストの意図を説明する
-```
 
 ### `gen-tests-uncovered` オプション
 

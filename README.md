@@ -68,6 +68,7 @@ ingest → query → visualize
 ├── docs/
 │   ├── analysis.md            # Java/Clojure 解析 end-to-end・クエリ例
 │   ├── api.md                 # workbench.core API・スキーマ詳細
+│   ├── codegen.md             # AI テスト生成ガイド・データフロー・制約
 │   ├── trial.md               # Trial ワークフロー詳細
 │   └── setup.md               # 環境セットアップ詳細
 ├── manifest.scm               # Guix 環境定義（推奨実行環境）
@@ -152,6 +153,7 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 |---|---|
 | [docs/analysis.md](docs/analysis.md) | Java/Clojure 解析 end-to-end・クエリ例・限界 |
 | [docs/api.md](docs/api.md) | workbench.core API・テーブルスキーマ・XTDB 落とし穴 |
+| [docs/codegen.md](docs/codegen.md) | AI テスト生成ガイド・データフロー・制約・使い方手順 |
 | [docs/trial.md](docs/trial.md) | Trial ワークフロー・trial.edn・seed-history・init-trial |
 | [docs/setup.md](docs/setup.md) | 事前要件・orcli・OpenRefine Windows 起動・WSL 接続 |
 
