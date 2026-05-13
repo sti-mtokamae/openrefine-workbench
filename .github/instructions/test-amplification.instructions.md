@@ -1,5 +1,5 @@
 ---
-description: "Use when fixing or placing generated test skeletons, running mvn test, resolving UnnecessaryStubbingException, fixing package declarations, or aligning Mock types with real source. Covers the full flow from .md skeleton to passing Maven tests."
+description: "Use when fixing or placing generated test skeletons or running mvn test. Covers the full flow from .md skeleton to passing Maven tests."
 applyTo: "trials/experiments/**/src/test/**/*.java"
 ---
 
@@ -15,10 +15,17 @@ applyTo: "trials/experiments/**/src/test/**/*.java"
 | `import` 文の補完 | ✅ 実ソース参照 | |
 | Mock の型・Mapper 戻り値型の修正 | ✅ 実 Mapper インターフェース照合 | |
 | `UnnecessaryStubbingException` の修正 | ✅ エラー行のスタブを削除 | |
-| `expected` 値の決定 | | ✅ 仕様確認 |
-| `private` メソッドのテスト方針 | | ✅ 設計判断 |
+| `expected` 値の決定 | | ✅ 仕様確認（AI はコメントで候補を提示するが値の確定は人間が行う） |
+| `private` メソッドのテスト方針 | | ✅ 設計判断（AI は public メソッド経由の間接テストを提案するが採否は人間が決める） |
 
 ## 修正手順
+
+**概要**:
+
+1. 手順 1〜3 でファイルを整えてから手順 4 で `mvn test` を実行する。
+2. エラーが出たら「典型エラーと対処」を参照して原因を特定し修正する。
+3. 修正後に再実行する。最大 3 回まで試行する。
+4. 3 回すべて失敗した場合は作業を中止し、エラーメッセージ・試行内容・進捗状況をユーザーに報告する。
 
 ### 1. パッケージ宣言
 テスト対象クラスと **同じパッケージ** にする（`@InjectMocks` でパッケージプライベートへのアクセスが効くため）。
@@ -52,7 +59,8 @@ MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED" \
   mvn test -pl <module> -Dtest=<TestClassName>
 ```
 
-エラーがあれば修正して再実行する（最大 3 回）。  
+エラーがあれば修正して再実行する（最大 3 回まで試行し、それでも解消しない場合はエラーメッセージと該当箇所をユーザーに報告して作業を止める）。  
+外部接続・環境固有のエラー（DB 接続失敗等）はユニットテストの範囲外のため、発生した場合も同様にユーザーへ報告する。  
 `expected` が `/* expected */` のままのテストは残したままで OK。
 
 ## 典型エラーと対処
