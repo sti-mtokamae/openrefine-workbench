@@ -14,7 +14,6 @@ guix shell -m manifest.scm
 |---|---|---|
 | Clojure | 言語ランタイム | https://clojure.org/guides/install_clojure |
 | OpenJDK 21+ | Java ランタイム | https://openjdk.org/ |
-| Babashka [任意] | JVM 起動コスト削減（ローカル開発用） | https://babashka.org/ |
 | GitHub CLI [任意] | GitHub 連携 | https://cli.github.com/ |
 
 ---
