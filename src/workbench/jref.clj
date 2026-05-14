@@ -213,7 +213,7 @@
 
 (defn- method->sig-doc
   "MethodDeclaration 1 件を :jsigs ドキュメントに変換する。"
-  [^MethodDeclaration md cls-name trial]
+  [^MethodDeclaration md cls-name pkg trial]
   (let [mname   (.getNameAsString md)
         params  (->> (.getParameters md)
                      (mapv (fn [p]
@@ -228,6 +228,7 @@
                      (mapv #(-> % .getKeyword .asString)))]
     {:xt/id         (str "jsig/" (or trial "_") "/" cls-name "/" mname "(" ptypes ")")
      :jsig/trial    trial
+     :jsig/package  pkg
      :jsig/class    cls-name
      :jsig/method   mname
      :jsig/params   params
@@ -239,12 +240,15 @@
   "1 つの .java ファイルを解析し、メソッドシグネチャドキュメントのシーケンスを返す。"
   [^java.io.File f trial]
   (try
-    (let [cu (StaticJavaParser/parse f)]
+    (let [cu  (StaticJavaParser/parse f)
+          pkg (-> cu .getPackageDeclaration
+                  (.map #(.getNameAsString %))
+                  (.orElse ""))]
       (->> (.findAll cu ClassOrInterfaceDeclaration)
            (mapcat (fn [^ClassOrInterfaceDeclaration cls]
                      (let [cls-name (.getNameAsString cls)]
                        (->> (.findAll cls MethodDeclaration)
-                            (map #(method->sig-doc % cls-name trial))))))))
+                            (map #(method->sig-doc % cls-name pkg trial))))))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "[jsig] parse error: " (.getName f) " — " (.getMessage e))))
@@ -271,7 +275,7 @@
                      set)
         to-del  (set/difference old-ids new-ids)]
     (when (seq to-del)
-      (xt/execute-tx node (mapv #(vector :delete :jsigs %) to-del)))
+      (xt/execute-tx node (mapv #(vector :delete-docs :jsigs %) to-del)))
     (doseq [batch (partition-all 2000 docs)]
       (xt/execute-tx node (mapv #(vector :put-docs :jsigs %) batch)))
     {:put (count docs) :delete (count to-del)}))

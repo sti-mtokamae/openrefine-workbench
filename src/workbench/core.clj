@@ -855,6 +855,7 @@
                    sigs)
         signatures (mapv (fn [s]
                            {:method  (:jsig/method s)
+                            :package (:jsig/package s)
                             :params  (:jsig/params s)
                             :return  (:jsig/return s)
                             :throws  (:jsig/throws s)
@@ -928,10 +929,14 @@
                             (str " throws " (str/join ", " (:throws s)))))))
                  (:signatures ctx)))
           "  (情報なし)")
+        ;; signatures からパッケージ名を取得（最初の1件から）
+        pkg     (some :package (:signatures ctx))
         prompt
         (str "以下は Java クラス " target " の静的解析情報です。\n"
              "JUnit 5 + Mockito を使ったユニットテストコードを生成してください。\n\n"
-             "## 対象\n" target "\n\n"
+             "## 対象\n" target "\n"
+             (when pkg (str "パッケージ: " pkg "\n"))
+             "\n"
              "## メソッドシグネチャ\n" sig-txt "\n\n"
              "## 直接依存（Mock 候補）\n" deps-txt "\n\n"
              "## SQL 縛り（MyBatis Mapper 経由）\n" sql-txt "\n\n"
