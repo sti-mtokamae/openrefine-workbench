@@ -996,6 +996,59 @@
                       :sql-deps sqls}))))
          vec)))
 
+;; -------------------------
+;; phase tracking
+;; -------------------------
+
+(defn- phase-id [trial-id phase]
+  (str trial-id ":" (subs (str phase) 1)))
+
+(defn phase-done?
+  "trial-id の phase が XTDB に :done として記録されているか確認する。"
+  [trial-id phase]
+  (boolean
+    (->> (q '(from :trial-phases [{:xt/id id :tphase/status st}]))
+         (some #(and (= (phase-id trial-id phase) (:id %))
+                     (= :done (:st %)))))))
+
+(defn mark-phase!
+  "trial-id の phase の進捗を XTDB に記録する。
+   status: :done | :failed | :running"
+  [trial-id phase status]
+  (xt/execute-tx (node)
+    [[:put-docs :trial-phases
+      {:xt/id         (phase-id trial-id phase)
+       :tphase/trial  trial-id
+       :tphase/phase  phase
+       :tphase/status status
+       :tphase/at     (java.time.Instant/now)}]]))
+
+(defn phase-summary
+  "trial-id の全フェーズ進捗一覧を返す。
+
+   例:
+     (phase-summary \"tradehub\")"
+  [trial-id]
+  (->> (q '(from :trial-phases [{:xt/id id :tphase/trial t
+                                  :tphase/phase ph :tphase/status st
+                                  :tphase/at at}]))
+       (filter #(= trial-id (:t %)))
+       (map #(select-keys % [:ph :st :at]))
+       (sort-by :ph)))
+
+(defn reset-phase!
+  "trial-id の phase の進捗を削除して再実行可能にする。
+
+   例:
+     (reset-phase! \"tradehub\" :ingest/jref)"
+  [trial-id phase]
+  (xt/execute-tx (node)
+    [[:delete-docs :trial-phases (phase-id trial-id phase)]]))
+
+;; -------------------------
+;; bulk test generation
+;; -------------------------
+
 (defn gen-tests-uncovered
   "未カバー×SQL縛りのメソッドを全件洗い出し、gen-test でテストコードを生成する。
 

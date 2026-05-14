@@ -1,3 +1,21 @@
 #!/usr/bin/env bash
+# bin/run-trial <trial.edn>
+#
+# :trial/tool に応じてランナーを切り替える:
+#   :openrefine    → openrefine-runner (OpenRefine API 制御)
+#   :xtdb-workbench → workbench.runner (XTDB フェーズパイプライン)
 
-exec guix shell -m manifest.scm -- clojure -M -m openrefine-runner "$@"
+set -euo pipefail
+
+if [[ -z "${1:-}" ]]; then
+  echo "Usage: bin/run-trial <trial.edn>" >&2
+  exit 1
+fi
+
+TRIAL_FILE="$1"
+
+if grep -q ':xtdb-workbench' "$TRIAL_FILE"; then
+  exec guix shell -m manifest.scm -- clojure -A:xtdb -M -m workbench.runner "$@"
+else
+  exec guix shell -m manifest.scm -- clojure -M -m openrefine-runner "$@"
+fi

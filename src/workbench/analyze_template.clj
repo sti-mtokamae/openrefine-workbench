@@ -2,16 +2,19 @@
 ;; =============================================================================
 ;; analyze_template.clj — Spring Boot モノリシックアプリ分析テンプレート
 ;;
-;; 使い方:
+;; ⚠️  DEPRECATED（ingest フェーズは workbench.runner に移行済み）
+;;
+;;   ingest フェーズ（jref! / jsig! / cochange! / sqlref!）は
+;;   trial.edn の :phases + bin/run-trial で実行してください。
+;;
+;;   このテンプレートは analyze / report フェーズ（fan-in / cochange 分析 /
+;;   SQL 影響レポート / 深堀り分析）の REPL スニペット集として残しています。
+;;   新規 trial では analyze.clj の代わりに REPL から直接呼び出すことを推奨。
+;;
+;; 使い方（残す場合）:
 ;;   1. 下記「★ プロジェクト設定」を書き換える
 ;;   2. guix shell -m manifest.scm -- clojure -A:xtdb -J-Xmx768m -M <このファイル>
 ;;
-;; 初回実行時は jref!/cochange! が XTDB に書き込む（数分かかる）。
-;; 再実行時は jref!/cochange! をコメントアウトするとスキップできる。
-;; XTDB データを作り直す場合は事前に rm -rf .xtdb/ を実行すること。
-;;
-;; 注意: bash の ! はヒストリ展開されるため、このファイルを -M で直接渡すこと。
-;;       REPL で評価する場合も同様にファイル経由を推奨。
 ;; =============================================================================
 (ns workbench.analyze-template
   (:require [workbench.core :as core]
