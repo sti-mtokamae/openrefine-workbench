@@ -860,14 +860,23 @@
                             :return  (:jsig/return s)
                             :throws  (:jsig/throws s)
                             :mods    (:jsig/mods s)})
-                         sigs-flt)]
-    {:trial       trial
-     :class       class-name
-     :method      method
-     :direct-deps direct
-     :sql-refs    sqls
-     :coverage    cov
-     :signatures  signatures}))
+                         sigs-flt)
+        ;; 依存クラスのパッケージ情報（import の推測精度向上用）
+        dep-cls-names (distinct (map #(first (str/split % #"/")) direct))
+        dep-packages  (into {}
+                        (keep (fn [cls]
+                                (when-let [pkg (some :jsig/package
+                                                     (jsigs :trial trial :cls cls))]
+                                  [cls pkg]))
+                              dep-cls-names))]
+    {:trial        trial
+     :class        class-name
+     :method       method
+     :direct-deps  direct
+     :dep-packages dep-packages
+     :sql-refs     sqls
+     :coverage     cov
+     :signatures   signatures}))
 
 (defn gen-test
   "test-context の情報を AI に渡して JUnit 5 + Mockito テストコードを生成する。
@@ -890,7 +899,12 @@
                  class-name)
         deps-txt
         (if (seq (:direct-deps ctx))
-          (str/join "\n" (map #(str "  - " %) (:direct-deps ctx)))
+          (str/join "\n"
+            (map (fn [sym]
+                   (let [cls (first (str/split sym #"/"))
+                         pkg (get (:dep-packages ctx) cls)]
+                     (str "  - " sym (when pkg (str "  [package: " pkg "]")))))
+                 (:direct-deps ctx)))
           "  (なし)")
         sql-txt
         (if (seq (:sql-refs ctx))
@@ -942,10 +956,19 @@
              "## SQL 縛り（MyBatis Mapper 経由）\n" sql-txt "\n\n"
              "## JaCoCo カバレッジ（covered=0 = 完全未テスト）\n" cov-txt "\n\n"
              "## 要件\n"
+             "- package 宣言を必ず先頭に含める\n"
              "- JUnit 5 (@Test, @ExtendWith(MockitoExtension.class))\n"
-             "- Mockito (@Mock, when(...).thenReturn(...))\n"
+             "- @InjectMocks でテスト対象、@Mock で依存クラスをセットアップする\n"
+             "- Mock の型はインターフェース（*Service, *Mapper 等）を使い、*Impl クラスを直接 Mock しない\n"
+             "- 直接依存に *Impl クラスが含まれる場合は Impl を除いた名前のインターフェースを @Mock に使う\n"
+             "- Mockito (@Mock, @InjectMocks, when(...).thenReturn(...))\n"
              "- covered=0 のメソッドを優先してテストする\n"
              "- SQL 縛りがある場合は Mapper の戻り値を Mock で制御するテストを含める\n"
+             "- getDeclaredMethod 等のリフレクションは使わない\n"
+             "- テストクラス外にスタブクラスを定義しない\n"
+             "- record クラスは mock() せず、コンストラクタで直接インスタンス化するか any() で引数マッチングする\n"
+             "- null や空リスト入力のテストを必ず含め、その場合は verifyNoInteractions() で副作用がないことを検証する\n"
+             "- Mapper の戻り値が Optional 型の場合は Optional.of(...) / Optional.empty() で stub する\n"
              "- 日本語コメントでテストの意図を説明する")]
     (codegen/chat-complete
      [{:role "system"

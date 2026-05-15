@@ -9,9 +9,10 @@
    [xtdb.api         :as xt])
   (:import
    [com.github.javaparser StaticJavaParser ParserConfiguration ParserConfiguration$LanguageLevel]
-   [com.github.javaparser.ast.expr MethodCallExpr]
+   [com.github.javaparser.ast.expr MethodCallExpr ObjectCreationExpr]
    [com.github.javaparser.ast.body
-    MethodDeclaration ClassOrInterfaceDeclaration FieldDeclaration]))
+    MethodDeclaration ClassOrInterfaceDeclaration FieldDeclaration
+    RecordDeclaration]))
 
 ;; Java 21 の構文（Record, Switch expression, Text Block, Pattern matching 等）を解析できるよう設定
 (.setLanguageLevel (StaticJavaParser/getParserConfiguration)
@@ -38,7 +39,7 @@
 (defn- from-sym
   "呼び出し式が属するクラス名/メソッド名を返す。
    例: \"FooController/foo\"  (ネストしていない場合は \"<top-level>\")"
-  [^MethodCallExpr expr]
+  [expr]
   (let [cls (some-> (find-ancestor expr ClassOrInterfaceDeclaration) .getNameAsString)
         mth (some-> (find-ancestor expr MethodDeclaration)           .getNameAsString)]
     (cond
@@ -154,6 +155,27 @@
        (filter #(and (.isFile ^java.io.File %)
                      (.endsWith (.getName ^java.io.File %) ".java")))))
 
+(defn- new->doc
+  "ObjectCreationExpr 1 件を :refs ドキュメントに変換する。
+   :ref/to は ClassName/<init> 形式で記録する。"
+  [^ObjectCreationExpr expr rel-path trial]
+  (let [from      (from-sym expr)
+        cls-name  (.getNameAsString (.getType expr))
+        to        (str cls-name "/<init>")
+        pos       (opt->val (.getBegin expr))
+        line      (some-> pos .-line)
+        col       (some-> pos .-column)
+        id-prefix (if trial (str trial "::") "")]
+    {:xt/id     (str id-prefix from "->" to)
+     :ref/trial trial
+     :ref/kind  ":new"
+     :ref/from  from
+     :ref/to    to
+     :ref/file  rel-path
+     :ref/line  line
+     :ref/col   col
+     :ref/arity (.size (.getArguments expr))}))
+
 (defn- parse-file
   "1 つの .java ファイルを解析し、call-doc のシーケンスを返す。
    パースエラーは警告を出してスキップする。"
@@ -162,8 +184,12 @@
         root-abs (.getAbsolutePath (io/file root))
         rel      (subs abs (inc (count root-abs)))]
     (try
-      (let [cu (.findAll (StaticJavaParser/parse f) MethodCallExpr)]
-        (map #(call->doc % rel trial field-map iface-impl-map) cu))
+      (let [parsed (StaticJavaParser/parse f)
+            calls  (.findAll parsed MethodCallExpr)
+            news   (.findAll parsed ObjectCreationExpr)]
+        (concat
+          (map #(call->doc % rel trial field-map iface-impl-map) calls)
+          (map #(new->doc % rel trial) news)))
       (catch Exception e
         (binding [*out* *err*]
           (println (str "[jref] parse error: " rel " — " (.getMessage e))))
@@ -244,11 +270,31 @@
           pkg (-> cu .getPackageDeclaration
                   (.map #(.getNameAsString %))
                   (.orElse ""))]
-      (->> (.findAll cu ClassOrInterfaceDeclaration)
-           (mapcat (fn [^ClassOrInterfaceDeclaration cls]
-                     (let [cls-name (.getNameAsString cls)]
-                       (->> (.findAll cls MethodDeclaration)
-                            (map #(method->sig-doc % cls-name pkg trial))))))))
+      (concat
+        ;; 通常クラス・インターフェース
+        (->> (.findAll cu ClassOrInterfaceDeclaration)
+             (mapcat (fn [^ClassOrInterfaceDeclaration cls]
+                       (let [cls-name (.getNameAsString cls)]
+                         (->> (.findAll cls MethodDeclaration)
+                              (map #(method->sig-doc % cls-name pkg trial)))))))
+        ;; Java record — コンポーネントをアクセサとして登録 + 明示的メソッド
+        (->> (.findAll cu RecordDeclaration)
+             (mapcat (fn [^RecordDeclaration rec]
+                       (let [cls-name (.getNameAsString rec)
+                             accessors (->> (.getParameters rec)
+                                           (map (fn [p]
+                                                  {:xt/id        (str "jsig/" (or trial "_") "/" cls-name "/" (.getNameAsString p) "()")
+                                                   :jsig/trial   trial
+                                                   :jsig/package pkg
+                                                   :jsig/class   cls-name
+                                                   :jsig/method  (.getNameAsString p)
+                                                   :jsig/params  []
+                                                   :jsig/return  (.asString (.getType p))
+                                                   :jsig/throws  []
+                                                   :jsig/mods    ["public"]})))
+                             methods  (->> (.findAll rec MethodDeclaration)
+                                          (map #(method->sig-doc % cls-name pkg trial)))]
+                         (concat accessors methods)))))))
     (catch Exception e
       (binding [*out* *err*]
         (println (str "[jsig] parse error: " (.getName f) " — " (.getMessage e))))
