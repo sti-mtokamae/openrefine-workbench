@@ -21,14 +21,8 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    container:
-      image: registry.guix.gnu.org/guix
-      options: --privileged
 
     steps:
-      - name: Start Guix daemon
-        run: guix-daemon --build-users-group=guixbuild &
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -45,6 +39,9 @@ jobs:
           path: ~/.m2/repository
           key: maven-${{ hashFiles('deps.edn') }}
           restore-keys: maven-
+
+      - name: Setup Guix
+        uses: PromyLoph/guix-install-action@v1.6
 
       - name: Run smoke test via Guix
         run: guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samples/repo
