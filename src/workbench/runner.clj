@@ -41,6 +41,50 @@
   (let [n (core/jacoco! (get-in phase-spec [:params :jacoco-xml]) :trial (:trial/id trial))]
     (println (str "  jacocos: " n))))
 
+;; -------------------------
+;; analyze フェーズ
+;; -------------------------
+
+(defmethod run-phase! :analyze/overview [trial phase-spec]
+  (let [trial-id (:trial/id trial)
+        top-n    (get-in phase-spec [:params :top-n] 20)
+        rs       (core/jrefs :trial trial-id :exclude-test true)]
+    (println (str "\n--- fan-in top " top-n " ---"))
+    (doseq [h (take top-n (core/fan-in rs))]
+      (println (format "  %3d  %s" (:count h) (:symbol h))))
+    (println (str "\n--- fan-out top " top-n " ---"))
+    (doseq [h (take top-n (core/fan-out rs))]
+      (println (format "  %3d  %s" (:count h) (:symbol h))))
+    (println "\n--- topo-sort top 40 ---")
+    (let [sorted (core/topo-sort :rs rs)]
+      (println (str "  total classes: " (count sorted)))
+      (doseq [[i c] (map-indexed vector (take 40 sorted))]
+        (println (format "  %3d  %s" (inc i) c))))))
+
+(defmethod run-phase! :analyze/uncovered-sql [trial _]
+  (let [trial-id   (:trial/id trial)
+        candidates (core/uncovered-sql-methods :trial trial-id)]
+    (println (str "  候補メソッド数: " (count candidates)))
+    (println (str "  対象クラス数:   " (count (distinct (map :class candidates)))))
+    (println "\n  --- クラス別内訳 ---")
+    (doseq [[cls ms] (->> candidates
+                          (group-by :class)
+                          (sort-by (comp count second) >))]
+      (println (format "  %-50s %2d メソッド" cls (count ms))))))
+
+(defmethod run-phase! :generate/tests [trial phase-spec]
+  (let [trial-id (:trial/id trial)
+        params   (:params phase-spec)
+        out-dir  (:out-dir params)
+        model    (:model params)
+        kwargs   (cond-> [:trial trial-id]
+                   out-dir (conj :out-dir out-dir)
+                   model   (conj :model model))
+        results  (apply core/gen-tests-uncovered kwargs)]
+    (println (str "  生成完了: " (count results) " メソッド"))
+    (doseq [{:keys [class method]} results]
+      (println (str "    " class "/" method)))))
+
 (defmethod run-phase! :default [_ phase-spec]
   (throw (ex-info (str "Unknown phase: " (:phase phase-spec))
                   {:phase-spec phase-spec})))
@@ -49,23 +93,32 @@
 ;; パイプライン実行
 ;; -------------------------
 
+(defn- track-phase?
+  "ingest/* と generate/* の完了状態を XTDB に記録する。
+   analyze/* は常に再実行（クエリ結果は変わりうるため）。"
+  [phase]
+  (not= "analyze" (namespace phase)))
+
 (defn execute-pipeline! [trial]
   (let [trial-id (:trial/id trial)
         phases   (:phases trial [])]
     (when (empty? phases)
       (println "  (no :phases defined in trial.edn)"))
     (doseq [phase-spec phases]
-      (let [phase (:phase phase-spec)]
-        (if (core/phase-done? trial-id phase)
+      (let [phase    (:phase phase-spec)
+            tracked? (track-phase? phase)]
+        (if (and tracked? (core/phase-done? trial-id phase))
           (println (str "[" phase "] skip (already done)"))
           (do
             (println (str "[" phase "] running..."))
             (try
               (run-phase! trial phase-spec)
-              (core/mark-phase! trial-id phase :done)
+              (when tracked?
+                (core/mark-phase! trial-id phase :done))
               (println (str "[" phase "] done"))
               (catch Exception ex
-                (core/mark-phase! trial-id phase :failed)
+                (when tracked?
+                  (core/mark-phase! trial-id phase :failed))
                 (println (str "[" phase "] FAILED: " (ex-message ex)))
                 (throw ex)))))))))
 
