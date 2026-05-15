@@ -26,12 +26,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache Guix store
+      - name: Cache Guix store + profiles
         uses: actions/cache@v4
         with:
-          path: /gnu/store
-          key: guix-store-${{ hashFiles('manifest.scm') }}
-          restore-keys: guix-store-
+          path: |
+            /gnu/store
+            /var/guix/profiles
+          key: guix-${{ hashFiles('manifest.scm') }}
+          restore-keys: guix-
 
       - name: Cache Maven local repository
         uses: actions/cache@v4
