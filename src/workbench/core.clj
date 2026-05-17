@@ -10,12 +10,16 @@
      (q '(from :files [*]))
      (stop!)"
   (:require
+   [clojure.java.io     :as io]
+   [clojure.java.shell  :refer [sh]]
    [clojure.string      :as str]
    [workbench.codegen   :as codegen]
    [workbench.ingest    :as ingest]
    [workbench.jacoco    :as jacoco]
    [workbench.jref      :as jref]
-   [workbench.query     :as query]   [workbench.sqlref    :as sqlref]   [workbench.visualize :as visualize]
+   [workbench.query     :as query]
+   [workbench.sqlref    :as sqlref]
+   [workbench.visualize :as visualize]
    [xtdb.api            :as xt]
    [xtdb.node           :as xtn]))
 
@@ -805,6 +809,38 @@
 ;; AI テスト生成支援
 ;; -------------------------
 
+(defn- find-class-imports
+  "src-root 以下から <ClassName>.java を探し、import 行の vec を返す。
+   見つからない場合は nil。"
+  [src-root class-name]
+  (when src-root
+    (let [java-name (str class-name ".java")
+          f (first (filter #(and (.isFile ^java.io.File %)
+                                 (= (.getName ^java.io.File %) java-name))
+                           (file-seq (io/file src-root))))]
+      (when f
+        (->> (str/split-lines (slurp f))
+             (filter #(str/starts-with? (str/trim %) "import "))
+             vec)))))
+
+(defn- find-enum-values
+  "src-root 以下から <ClassName>.java を探し、enum クラスであれば定数名の vec を返す。
+   enum でない場合や見つからない場合は nil。"
+  [src-root class-name]
+  (when src-root
+    (let [java-name (str class-name ".java")
+          f (first (filter #(and (.isFile ^java.io.File %)
+                                 (= (.getName ^java.io.File %) java-name))
+                           (file-seq (io/file src-root))))]
+      (when f
+        (let [content (slurp f)]
+          (when (re-find #"\benum\b" content)
+            (->> (str/split-lines content)
+                 (keep #(when-let [m (re-find #"^\s*([A-Z][A-Z0-9_]*)[\s(,;]" %)]
+                           (second m)))
+                 distinct
+                 vec)))))))
+
 (defn test-context
   "クラス（+メソッド）のテスト生成コンテキストを構築する。
    :refs / :sqlrefs / :jacoco を統合した構造化情報を返す。
@@ -817,7 +853,7 @@
      (test-context \"DocumentAggregateServiceImpl\" :trial \"tradehub\")
      (test-context \"DocumentAggregateServiceImpl\" :trial \"tradehub\"
                    :method \"resolveTargetProcessIds\")"
-  [class-name & {:keys [trial method]}]
+  [class-name & {:keys [trial method src-root]}]
   (let [;; 直接の下流依存（深さ1）— Mock 候補
         rs      (jrefs :trial trial :prefix class-name)
         direct  (if method
@@ -861,22 +897,55 @@
                             :throws  (:jsig/throws s)
                             :mods    (:jsig/mods s)})
                          sigs-flt)
+        ;; 対象クラスの実際の import（hallucination 防止）— dep-cls-names より先に計算する
+        src-imports   (find-class-imports src-root class-name)
+        ;; src-imports からクラス名を抽出（インターフェース・enum も含む）
+        src-import-cls-names (when src-imports
+                               (->> src-imports
+                                    (keep #(second (re-find #"^import\s+[\w.]+\.(\w+);$" %)))
+                                    distinct))
         ;; 依存クラスのパッケージ情報（import の推測精度向上用）
-        dep-cls-names (distinct (map #(first (str/split % #"/")) direct))
+        ;; direct-deps と src-imports の両方から収集することで、
+        ;; インターフェース・enum など jrefs に出ないクラスも補足する
+        dep-cls-names (distinct (concat
+                                  (map #(first (str/split % #"/")) direct)
+                                  (or src-import-cls-names [])))
         dep-packages  (into {}
                         (keep (fn [cls]
                                 (when-let [pkg (some :jsig/package
                                                      (jsigs :trial trial :cls cls))]
                                   [cls pkg]))
-                              dep-cls-names))]
-    {:trial        trial
-     :class        class-name
-     :method       method
-     :direct-deps  direct
-     :dep-packages dep-packages
-     :sql-refs     sqls
-     :coverage     cov
-     :signatures   signatures}))
+                              dep-cls-names))
+        ;; 依存クラスのメソッドシグネチャ（hallucination 防止：引数型・数・throws を正確に提供）
+        dep-signatures (->> dep-cls-names
+                            (mapcat (fn [cls]
+                                      (map (fn [s]
+                                             {:class  cls
+                                              :method (:jsig/method s)
+                                              :params (:jsig/params s)
+                                              :return (:jsig/return s)
+                                              :throws (:jsig/throws s)
+                                              :mods   (:jsig/mods s)})
+                                           (jsigs :trial trial :cls cls))))
+                            vec)
+        ;; 依存 enum クラスの定数（src-root 指定時のみ）
+        dep-enum-values (when src-root
+                          (->> dep-cls-names
+                               (keep #(when-let [vals (find-enum-values src-root %)]
+                                        [% vals]))
+                               (into {})))]
+    {:trial           trial
+     :class           class-name
+     :method          method
+     :src-root        src-root
+     :direct-deps     direct
+     :dep-packages    dep-packages
+     :dep-signatures  dep-signatures
+     :dep-enum-values dep-enum-values
+     :sql-refs        sqls
+     :coverage        cov
+     :signatures      signatures
+     :src-imports     src-imports}))
 
 (defn gen-test
   "test-context の情報を AI に渡して JUnit 5 + Mockito テストコードを生成する。
@@ -892,8 +961,8 @@
      (gen-test \"DocumentAggregateServiceImpl\" :trial \"tradehub\")
      (gen-test \"DocumentAggregateServiceImpl\" :trial \"tradehub\"
                :method \"resolveTargetProcessIds\")"
-  [class-name & {:keys [trial method model]}]
-  (let [ctx    (test-context class-name :trial trial :method method)
+  [class-name & {:keys [trial method model src-root]}]
+  (let [ctx    (test-context class-name :trial trial :method method :src-root src-root)
         target (if method
                  (str class-name "/" method)
                  class-name)
@@ -945,13 +1014,42 @@
           "  (情報なし)")
         ;; signatures からパッケージ名を取得（最初の1件から）
         pkg     (some :package (:signatures ctx))
+        ;; 対象クラスの実際の import セクション（src-root 指定時のみ）
+        import-txt
+        (when (seq (:src-imports ctx))
+          (str "## 実際の import（必ずこれをそのまま使うこと。ここにない型は架空の import を生成しないこと）\n"
+               (str/join "\n" (:src-imports ctx)) "\n\n"))
+        ;; 依存クラスのメソッドシグネチャ
+        dep-sig-txt
+        (if (seq (:dep-signatures ctx))
+          (str/join "\n"
+            (map (fn [s]
+                   (let [params-str (str/join ", "
+                                     (map #(str (:type %) " " (:name %))
+                                          (:params s)))]
+                     (str "  " (:return s) " " (:class s) "." (:method s)
+                          "(" params-str ")"
+                          (when (seq (:throws s))
+                            (str " throws " (str/join ", " (:throws s)))))))
+                 (:dep-signatures ctx)))
+          "  (情報なし)")
+        ;; 依存 enum 定数
+        dep-enum-txt
+        (when (seq (:dep-enum-values ctx))
+          (str/join "\n"
+            (map (fn [[cls vals]]
+                   (str "  " cls ": " (str/join ", " vals)))
+                 (:dep-enum-values ctx))))
         prompt
         (str "以下は Java クラス " target " の静的解析情報です。\n"
              "JUnit 5 + Mockito を使ったユニットテストコードを生成してください。\n\n"
              "## 対象\n" target "\n"
              (when pkg (str "パッケージ: " pkg "\n"))
              "\n"
+             (or import-txt "")
              "## メソッドシグネチャ\n" sig-txt "\n\n"
+             "## 依存クラスのメソッドシグネチャ（引数の型・数・throws を厳守すること）\n" dep-sig-txt "\n\n"
+             (when dep-enum-txt (str "## enum定数（記載のもののみ使うこと。記載外の定数は存在しない）\n" dep-enum-txt "\n\n"))
              "## 直接依存（Mock 候補）\n" deps-txt "\n\n"
              "## SQL 縛り（MyBatis Mapper 経由）\n" sql-txt "\n\n"
              "## JaCoCo カバレッジ（covered=0 = 完全未テスト）\n" cov-txt "\n\n"
@@ -967,8 +1065,11 @@
              "- getDeclaredMethod 等のリフレクションは使わない\n"
              "- テストクラス外にスタブクラスを定義しない\n"
              "- record クラスは mock() せず、コンストラクタで直接インスタンス化するか any() で引数マッチングする\n"
-             "- null や空リスト入力のテストを必ず含め、その場合は verifyNoInteractions() で副作用がないことを検証する\n"
+             "- stub する際、void メソッドには doNothing()、boolean/オブジェクト等の戻り値があるメソッドには when(...).thenReturn(...) を使うこと。doNothing() を void 以外のメソッドに使ってはならない\n"
+             "- null や空リスト入力のテストを含めること。実装が null チェックをしていない場合は NPE が発生するので assertThrows(NullPointerException.class, ...) で検証し、verifyNoInteractions() は使わない\n"
              "- Mapper の戻り値が Optional 型の場合は Optional.of(...) / Optional.empty() で stub する\n"
+             "- 依存クラスの呼び出しは「## 依存クラスのメソッドシグネチャ」の引数型・数・throws を厳守すること\n"
+             "- enum の値は「## enum定数」に記載のもののみ使うこと（記載外の定数名は存在しない）\n"
              "- 日本語コメントでテストの意図を説明する")]
     (codegen/chat-complete
      [{:role "system"
@@ -976,6 +1077,318 @@
       {:role "user"
        :content prompt}]
      :model (or model "openai/gpt-4.1"))))
+
+;; -------------------------
+;; テスト修正支援（fix-test）
+;; -------------------------
+
+(defn- compile-errors
+  "mvnw test-compile を実行してエラー行のみ返す。
+   mvn-root: mvnw があるディレクトリ
+   module:   -pl に渡すモジュール名（例: \"common-lib\"）"
+  [mvn-root module]
+  (let [{:keys [out err]}
+        (sh "sh" "-c"
+         (str "cd " mvn-root
+              " && MAVEN_OPTS='--add-opens java.base/java.lang=ALL-UNNAMED'"
+              " ./mvnw test-compile -pl " module " 2>&1"))]
+    (->> (str/split-lines (str out err))
+         (filter #(re-find #"\[ERROR\]|error:" %))
+         (str/join "\n"))))
+
+(defn- filter-header-imports
+  "ヘッダーの import 行を検証し、存在しない型の import を除去する。
+   src-import-lines: test-context の :src-imports（実際の import 行リスト）
+   テストフレームワーク (junit/mockito/spring/java.*) の import は常に保持する。
+   ワイルドカード import（例: com.example.dto.*）のパッケージ配下の型も保持する。"
+  [header src-import-lines]
+  (let [valid-fqns    (into #{} (keep #(second (re-find #"^import\s+([\w.]+);$" %))
+                                      src-import-lines))
+        ;; src が "import com.example.dto.*;" → "com.example.dto." をプレフィックスとして収集
+        wildcard-pkgs (into #{} (keep #(when-let [[_ pkg] (re-find #"^import\s+([\w.]+)\.\*;" %)]
+                                         (str pkg "."))
+                                      src-import-lines))
+        keep? (fn [line]
+                (if-let [[_ fqn] (re-find #"^import\s+([\w.]+);$" line)]
+                  (or (valid-fqns fqn)
+                      (some #(str/starts-with? fqn %) wildcard-pkgs)
+                      (re-find #"^(org\.junit|org\.mockito|org\.springframework\.test|java\.|javax\.|lombok\.|com\.fasterxml\.jackson)" fqn))
+                  true))]  ; import 行以外は常に保持
+    (str/join "\n" (filter keep? (str/split-lines header)))))
+
+(defn- split-test-file
+  "Java テストファイルをヘッダーと各テストメソッドのチャンクに分割する。
+   @Test / @ParameterizedTest / @RepeatedTest / @TestFactory / @Disabled を
+   メソッド境界とみなす。
+
+   戻り値:
+     {:header  \"package...class {\"
+      :footer  \"}\"          ; クラス末尾の閉じ括弧（再結合時に追記）
+      :methods [{:idx 0 :start 20 :end 45 :code \"@Test\\nvoid foo() {...}\"}]}
+
+   :start / :end は 0-based 行インデックス（end は exclusive）"
+  [code]
+  (let [lines      (vec (str/split-lines code))
+        n          (count lines)
+        test-ann?  (fn [l]
+                     (re-find #"^\s*@(Test|ParameterizedTest|RepeatedTest|TestFactory|Disabled)\b" l))
+        test-starts (vec (keep-indexed (fn [i l] (when (test-ann? l) i)) lines))]
+    (if (empty? test-starts)
+      {:header code :methods [] :footer ""}
+      ;; クラス閉じ括弧 = 末尾の非空行が `^}` （インデントなし）の場合だけ分離する
+      (let [last-line-idx
+            (loop [i (dec n)]
+              (cond (neg? i) -1
+                    (not (str/blank? (nth lines i))) i
+                    :else (recur (dec i))))
+            has-class-close (and (>= last-line-idx 0)
+                                 (re-find #"^\}\s*$" (nth lines last-line-idx)))
+            footer-start  (if has-class-close last-line-idx n)
+            footer        (if has-class-close
+                            (str/join "\n" (subvec lines footer-start n))
+                            "")
+            effective-n   footer-start]
+        {:header  (str/join "\n" (subvec lines 0 (first test-starts)))
+         :footer  footer
+         :methods (map-indexed
+                    (fn [idx start]
+                      (let [end (get test-starts (inc idx) effective-n)]
+                        {:idx   idx
+                         :start start
+                         :end   end
+                         :code  (str/join "\n" (subvec lines start end))}))
+                    test-starts)}))))
+
+(defn- errors-for-method
+  "コンパイルエラー文字列から、メソッドの行範囲 [start-line, end-line) に
+   含まれるエラー行のみ返す。start-line は 1-based（Java コンパイラ出力形式）。"
+  [err-txt start-line end-line]
+  (when (seq err-txt)
+    (let [filtered (->> (str/split-lines err-txt)
+                        (filter (fn [line]
+                                  (if-let [[_ ln] (re-find #"\[(\d+),\d+\]" line)]
+                                    (let [n (Long/parseLong ln)]
+                                      (and (>= n start-line) (< n end-line)))
+                                    true))))]  ; 行番号なし行は常に含める
+      (when (seq filtered) (str/join "\n" filtered)))))
+
+(defn- fix-method-single
+  "テストメソッド 1 本を AI で修正し、修正済みメソッドコードを返す。
+   エラーがないメソッドは original-code をそのまま返す。"
+  [header-snippet method-code err-txt import-txt dep-sig-txt dep-enum-txt model]
+  (if-not (seq err-txt)
+    method-code
+    (let [prompt
+          (str "以下の Java テストメソッドにエラーがあります。\n"
+               "「## 正確な情報」を参照してエラーを修正し、修正済みのメソッドコードのみを返してください。\n"
+               "メソッド名・テストの意図は変えないこと。\n\n"
+               "## クラスヘッダー（参照用・変更不要）\n"
+               "```java\n" header-snippet "\n```\n\n"
+               "## 修正対象メソッド\n"
+               "```java\n" method-code "\n```\n\n"
+               "## コンパイルエラー\n" err-txt "\n\n"
+               "## 正確な情報\n\n"
+               "### 実際の import（ここにない型は使ってはいけない）\n"
+               (if (seq import-txt) import-txt "  (情報なし)") "\n\n"
+               "### 依存クラスの正確なメソッドシグネチャ\n"
+               dep-sig-txt "\n\n"
+               (when (seq dep-enum-txt)
+                 (str "### enum定数\n" dep-enum-txt "\n\n"))
+               "## 修正ルール\n"
+               "- @Test アノテーションからメソッド末尾の } まで（メソッド本体のみ）を返すこと\n"
+               "- クラス定義・import・クラス閉じ括弧は含めないこと\n"
+               "- コードブロック (```java ... ```) は不要。Java コードのみ返すこと")]
+      (codegen/chat-complete
+       [{:role "system"
+         :content "あなたは Java テストコードの修正専門家です。指定されたメソッドのみを修正します。"}
+        {:role "user" :content prompt}]
+       :model (or model "openai/gpt-4.1")))))
+
+(defn fix-test
+  "既存の Java テストファイルを test-context の情報と compile errors を元に AI で修正する。
+   gen-test と異なり、テストシナリオを保持したまま hallucination のみを修正する。
+
+   opts:
+     :trial     - トライアル識別子
+     :src-root  - プロダクションコードのルート
+     :java-path - 修正対象の .java ファイルパス
+     :mvn-root  - mvnw があるディレクトリ（compile errors 取得用、省略可）
+     :module    - mvn の -pl モジュール名（mvn-root 指定時に使用）
+     :errors    - コンパイルエラー文字列（直接渡す場合、mvn-root より優先）
+     :model     - 使用モデル（デフォルト: \"openai/gpt-4.1\"）
+
+   例:
+     (fix-test \"ActivityRecordServiceImpl\"
+       :trial    \"tradehub\"
+       :src-root \"trials/experiments/2026-04-28-tradehub/repo/common-lib/src/main/java\"
+       :java-path \"trials/experiments/2026-04-28-tradehub/exports/gen-tests/ActivityRecordServiceImpl/ActivityRecordServiceImplTest.java\"
+       :mvn-root  \"trials/experiments/2026-04-28-tradehub/repo\"
+       :module    \"common-lib\")"
+  [class-name & {:keys [trial src-root java-path mvn-root module errors model]}]
+  (let [existing-code (slurp java-path)
+        err-txt       (or errors
+                          (when mvn-root
+                            (compile-errors mvn-root (or module ".")))
+                          "")
+        ctx           (test-context class-name :trial trial :src-root src-root)
+        import-txt    (str/join "\n" (or (:src-imports ctx) []))
+        ;; 既存コードに登場するクラス名にだけ dep-signatures を絞る（トークン節約）
+        ;; ワイルドカード import（import pkg.*;）はパッケージ配下のクラスをファイルシステムから列挙して展開する
+        existing-cls  (let [specific (->> (str/split-lines existing-code)
+                                          (keep #(second (re-find #"^import\s+[\w.]+\.(\w+);$" %)))
+                                          set)
+                            wildcard (->> (str/split-lines existing-code)
+                                          (keep #(when-let [[_ pkg] (re-find #"^import\s+([\w.]+)\.\*;" %)]
+                                                   pkg))
+                                          (mapcat (fn [pkg]
+                                                    (when src-root
+                                                      (let [pkg-dir (io/file src-root (str/replace pkg "." "/"))]
+                                                        (when (.isDirectory pkg-dir)
+                                                          (->> (file-seq pkg-dir)
+                                                               (keep #(when (and (.isFile ^java.io.File %)
+                                                                                  (str/ends-with? (.getName ^java.io.File %) ".java"))
+                                                                         (str/replace (.getName ^java.io.File %) ".java" "")))))))))
+                                          set)]
+                        (into specific wildcard))
+        dep-sig-txt   (if (seq (:dep-signatures ctx))
+                        (let [filtered (->> (:dep-signatures ctx)
+                                            (filter #(existing-cls (:class %))))]
+                          (if (seq filtered)
+                            (str/join "\n"
+                              (map (fn [s]
+                                     (let [params-str (str/join ", "
+                                                       (map #(str (:type %) " " (:name %))
+                                                            (:params s)))]
+                                       (str "  " (:return s) " " (:class s) "." (:method s)
+                                            "(" params-str ")"
+                                            (when (seq (:throws s))
+                                              (str " throws " (str/join ", " (:throws s)))))))
+                                   filtered))
+                            "  (情報なし)"))
+                        "  (情報なし)")
+        dep-enum-txt  (when (seq (:dep-enum-values ctx))
+                        (let [filtered (filter (fn [[cls _]] (existing-cls cls))
+                                               (:dep-enum-values ctx))]
+                          (when (seq filtered)
+                            (str/join "\n"
+                              (map (fn [[cls vals]]
+                                     (str "  " cls ": " (str/join ", " vals)))
+                                   filtered)))))
+        lines         (str/split-lines existing-code)
+        per-method?   (> (count lines) 300)]
+    (if per-method?
+      ;; --- per-method モード（>300行の大ファイル用）---
+      ;; コンパイルエラーのある行範囲のメソッドだけ API で修正し、他は原文を維持する。
+      ;; これにより 1 メソッドあたり ~2,500 tokens に収まり 16,000 上限を回避できる。
+      (let [{:keys [header footer methods]} (split-test-file existing-code)
+            ;; ヘッダーの hallucinated import を除去（src-imports で検証）
+            fixed-header   (filter-header-imports header (or (:src-imports ctx) []))
+            ;; header-snippet は先頭 150 行（クラス宣言・フィールド・@BeforeEach を含む範囲）
+            header-snippet (str/join "\n" (take 150 (str/split-lines fixed-header)))
+            fixed-methods
+            (doall
+              (map (fn [{:keys [idx start end code]}]
+                     ;; compile errors の行番号は 1-based
+                     (let [m-err (errors-for-method err-txt (inc start) (inc end))]
+                       (if m-err
+                         (do
+                           (println (str "    修正: メソッド #" (inc idx)
+                                        " (L" (inc start) "-" end ") errors=true"))
+                           (fix-method-single header-snippet code m-err
+                                              import-txt dep-sig-txt dep-enum-txt model))
+                         (do
+                           (println (str "    スキップ: メソッド #" (inc idx)
+                                        " (L" (inc start) "-" end ") errors=none"))
+                           code))))
+                   methods))]
+        (println (str "  [per-method] 完了: "
+                      (count (filter identity
+                               (map #(errors-for-method err-txt (inc (:start %)) (inc (:end %)))
+                                    methods)))
+                      "/" (count methods) " メソッドを修正"))
+        (str fixed-header "\n" (str/join "\n" fixed-methods) "\n" footer))
+      ;; --- whole-file モード（≤300行の小ファイル用）---
+      (let [prompt
+            (str "以下の Java テストコードにエラーがあります。\n"
+                 "「## 正確な情報」を参照してエラーを修正し、修正済みの完全な Java コードのみを返してください。\n"
+                 "テストシナリオ・テストメソッド名・テストの意図は変えないこと。\n\n"
+                 "## 既存コード\n"
+                 "```java\n" existing-code "\n```\n\n"
+                 (when (seq err-txt)
+                   (str "## コンパイルエラー / テスト失敗\n" err-txt "\n\n"))
+                 "## 正確な情報\n\n"
+                 "### 実際の import（これ以外の型は架空。ここにない型を import してはいけない）\n"
+                 (if (seq import-txt) import-txt "  (情報なし)") "\n\n"
+                 "### 依存クラスの正確なメソッドシグネチャ（引数型・数・throws を厳守すること）\n"
+                 dep-sig-txt "\n\n"
+                 (when dep-enum-txt
+                   (str "### enum定数（記載のもののみ有効。記載外の定数名は存在しない）\n"
+                        dep-enum-txt "\n\n"))
+                 "## 修正ルール\n"
+                 "- import は上記「実際の import」からのみ選ぶこと\n"
+                 "- メソッド呼び出しの引数型・数は「正確なメソッドシグネチャ」に従うこと\n"
+                 "- enum 値は「enum定数」に記載のもののみ使うこと\n"
+                 "- @Value フィールドが未注入になる場合は ReflectionTestUtils.setField で設定すること\n"
+                 "- 全フィールドが null の DTO を複数 verify する場合は same() マッチャーを使うこと\n"
+                 "- コードブロック (```java ... ```) は不要。Java コードのみ返すこと")]
+        (codegen/chat-complete
+         [{:role "system"
+           :content "あなたは Java テストコードの修正専門家です。指示された修正のみを行い、余分な変更は加えません。"}
+          {:role "user"
+           :content prompt}]
+         :model (or model "openai/gpt-4.1"))))))
+
+(defn fix-tests-dir
+  "gen-tests ディレクトリ以下の全 *Test.java ファイルを fix-test で一括修正する。
+
+   opts:
+     :gen-dir   - gen-tests ディレクトリ（exports/gen-tests/ 等）
+     :trial     - トライアル識別子
+     :src-root  - プロダクションコードのルート
+     :mvn-root  - mvnw があるディレクトリ（compile errors 取得用、省略可）
+     :module    - mvn の -pl モジュール名（mvn-root 指定時に使用）
+     :dest-dir  - 修正済みファイルの出力先（省略時は上書き）
+     :force     - true のとき dest-dir にファイルが存在してもスキップしない
+     :dry-run   - true のとき API を呼ばず対象ファイル一覧のみ表示
+
+   例:
+     (fix-tests-dir
+       :gen-dir  \"trials/experiments/2026-04-28-tradehub/exports/gen-tests\"
+       :trial    \"tradehub\"
+       :src-root \"trials/experiments/2026-04-28-tradehub/repo/common-lib/src/main/java\"
+       :mvn-root \"trials/experiments/2026-04-28-tradehub/repo\"
+       :module   \"common-lib\")"
+  [& {:keys [gen-dir trial src-root mvn-root module dest-dir force dry-run model]
+      :or   {dry-run false force false}}]
+  (let [java-files (->> (file-seq (io/file gen-dir))
+                        (filter #(and (.isFile ^java.io.File %)
+                                      (str/ends-with? (.getName ^java.io.File %) "Test.java")))
+                        (sort-by #(.getPath ^java.io.File %)))]
+    (if dry-run
+      (doseq [f java-files]
+        (println (.getPath f)))
+      (doseq [^java.io.File f java-files]
+        (let [fname      (.getName f)
+              java-path  (.getPath f)
+              class-name (str/replace fname #"Test\.java$" "")
+              out-path   (if dest-dir
+                           (str dest-dir "/" class-name "/" fname)
+                           java-path)]
+          (if (and (not force) dest-dir (.exists (io/file out-path)))
+            (println (str "スキップ（既存）: " out-path))
+            (do
+              (println (str "修正中: " fname))
+              (try
+                (let [fixed (fix-test class-name
+                              :trial trial :src-root src-root
+                              :java-path java-path
+                              :mvn-root mvn-root :module module
+                              :model model)]
+                  (io/make-parents (io/file out-path))
+                  (spit out-path fixed)
+                  (println (str "  → " out-path)))
+                (catch Exception e
+                  (println (str "  ERROR [" fname "]: " (.getMessage e))))))))))))
 
 ;; -------------------------
 ;; 一括テスト生成支援
@@ -1093,7 +1506,7 @@
      (gen-tests-uncovered :trial \"tradehub\" :dry-run true)
      (gen-tests-uncovered :trial \"tradehub\" :out-dir \"/tmp/gen-tests\")
      (gen-tests-uncovered :trial \"tradehub\" :model \"openai/gpt-4o\")"
-  [& {:keys [trial model out-dir dry-run] :or {dry-run false}}]
+  [& {:keys [trial model out-dir src-root force dry-run] :or {dry-run false force false}}]
   (let [candidates (uncovered-sql-methods :trial trial)]
     (println (str "[gen-tests-uncovered] 候補: " (count candidates) " メソッド"))
     (if dry-run
@@ -1101,13 +1514,13 @@
       (mapv (fn [{:keys [class method sql-deps] :as c}]
               (let [dir  (when out-dir (str out-dir "/" class))
                     path (when out-dir (str dir "/" method ".md"))]
-                (if (and path (.exists (java.io.File. path)))
+                (if (and path (not force) (.exists (java.io.File. path)))
                   (do
                     (println (str "  スキップ（既存）: " class "/" method))
                     (assoc c :code :skipped))
                   (try
                     (println (str "  生成中: " class "/" method " ..."))
-                    (let [code   (gen-test class :trial trial :method method :model model)
+                    (let [code   (gen-test class :trial trial :method method :model model :src-root src-root)
                           result (assoc c :code code)]
                       (when dir
                         (.mkdirs (java.io.File. dir))
@@ -1117,3 +1530,204 @@
                       (println (str "  エラー（スキップ）: " class "/" method " - " (.getMessage e)))
                       (assoc c :code :error :error-msg (.getMessage e)))))))
             candidates))))
+
+;; -------------------------
+;; md → java 統合変換
+;; -------------------------
+
+(defn- extract-java-from-md
+  "md 文字列から java コードブロックを返す。
+   'package' 行から最初の ``` 行の直前までを抽出する。
+   ブレースが一致しない（途中切れ）場合は nil を返す。"
+  [md-str]
+  (let [code (->> (str/split-lines md-str)
+                  (drop-while #(not (str/starts-with? (str/trim %) "package ")))
+                  (take-while #(not (re-matches #"```.*" (str/trim %))))
+                  (str/join "\n"))
+        opens  (count (filter #{\{} code))
+        closes (count (filter #{\}} code))]
+    (when (= opens closes) code)))
+
+(defn- split-class-body-blocks
+  "クラス本体文字列をメンバーブロック（フィールドまたはメソッド）の
+   ベクタに分割する。空行でブロックを区切るが、ブレース内（depth>0）は
+   空行をまたいで継続する。
+   depth>0 で EOF に達したブロック（途中で切れたもの）は破棄する。"
+  [body-str]
+  (let [lines (str/split-lines body-str)]
+    (loop [remaining lines
+           current   []
+           depth     0
+           result    []]
+      (if (empty? remaining)
+        ;; depth=0 のブロックのみ追加（途中で切れたブロックは破棄）
+        (let [non-blank (filter #(not (str/blank? %)) current)]
+          (if (and (zero? depth) (seq non-blank))
+            (conj result current)
+            result))
+        (let [line      (first remaining)
+              blank?    (str/blank? line)
+              opens     (if blank? 0 (count (filter #{\{} line)))
+              closes    (if blank? 0 (count (filter #{\}} line)))
+              new-depth (+ depth opens (- closes))]
+          (cond
+            ;; 空行かつ depth=0 → ブロック区切り
+            (and blank? (zero? depth))
+            (let [non-blank (filter #(not (str/blank? %)) current)]
+              (if (seq non-blank)
+                (recur (rest remaining) [] 0 (conj result current))
+                (recur (rest remaining) [] 0 result)))
+            ;; それ以外 → 現在ブロックに追加
+            :else
+            (recur (rest remaining) (conj current line) new-depth result)))))))
+
+(defn- field-block?
+  "ブロックがフィールド宣言か（@Mock/@InjectMocks/@Spy/@Captor/@Autowired を含む）"
+  [block]
+  (some #(re-matches #"\s*@(Mock|InjectMocks|Spy|Captor|Autowired)(\(.*\))?\s*" %) block))
+
+(defn- field-decl-line
+  "フィールドブロックから型・変数名を含む宣言行を取得（重複検出キー）"
+  [block]
+  (some-> (->> block
+               (filter #(re-matches #"\s*(private|protected|public)\s+\S+.*;\s*" %))
+               first)
+          str/trim))
+
+(defn- method-name
+  "メソッドブロックからメソッド名を取得（重複検出キー）"
+  [block]
+  (->> block
+       (some #(when-let [m (re-find #"(?:void|[\w<>\[\]]+)\s+(\w+)\s*\(" %)] (second m)))))
+
+(defn merge-test-mds
+  "gen-tests/<class-name>/ 配下の *.md を統合して <class-name>Test.java を生成する。
+   既に .java が存在する場合はスキップ（:force true で上書き）。
+
+   opts:
+     :class   - クラス名（例 \"ProjectServiceImpl\"）
+     :gen-dir - gen-tests の基底ディレクトリ
+     :force   - true の場合既存 .java を上書き
+
+   戻り値: {:status :merged|:skipped|:no-mds, :class class, :test-count n}
+
+   例:
+     (merge-test-mds
+       :class \"ProjectServiceImpl\"
+       :gen-dir \"trials/experiments/2026-04-28-tradehub/exports/gen-tests\")"
+  [& {:keys [class gen-dir force]}]
+  (let [dir      (java.io.File. (str gen-dir "/" class))
+        out-path (str (.getPath dir) "/" class "Test.java")
+        md-files (->> (file-seq dir)
+                      (filter #(and (.isFile %)
+                                    (str/ends-with? (.getName %) ".md")))
+                      sort)]
+    (cond
+      (and (not force) (.exists (java.io.File. out-path)))
+      (do (println (str "  スキップ（既存）: " class "Test.java"))
+          {:status :skipped :class class})
+
+      (empty? md-files)
+      (do (println (str "  スキップ（md なし）: " class))
+          {:status :no-mds :class class})
+
+      :else
+      (let [all-blocks   (mapv #(extract-java-from-md (slurp %)) md-files)
+            ;; nil（ブレース不均衡・途中で切れた md）をスキップ
+            java-blocks  (filterv some? all-blocks)
+            _            (when (< (count java-blocks) (count all-blocks))
+                           (println (str "  警告: " (- (count all-blocks) (count java-blocks))
+                                         " 件の md をスキップ（途中で切れている）")))
+            all-lines    (mapcat str/split-lines java-blocks)
+            pkg-line     (first (filter #(str/starts-with? % "package ") all-lines))
+            all-imports  (->> all-lines
+                              (filter #(and (str/starts-with? % "import ")
+                                           (str/ends-with? % ";")))
+                              (into (sorted-set)))
+            ;; クラスアノテーション: class 宣言直前の @ 行
+            class-annots (->> java-blocks
+                              (mapcat (fn [jb]
+                                (let [ls (str/split-lines jb)
+                                      ci (->> (map-indexed vector ls)
+                                              (some (fn [[i l]]
+                                                      (when (re-matches #".*\bclass\s+\S+.*\{.*" l) i))))]
+                                  (when ci
+                                    (->> (take ci ls)
+                                         (filter #(str/starts-with? (str/trim %) "@")))))))
+                              (into (sorted-set)))
+            ;; 各 md のクラス本体を抽出（class { の次行 〜 最後の } の前まで）
+            class-bodies (->> java-blocks
+                              (mapv (fn [jb]
+                                (let [ls  (str/split-lines jb)
+                                      ci  (->> (map-indexed vector ls)
+                                               (some (fn [[i l]]
+                                                       (when (re-matches #".*\bclass\s+\S+.*\{.*" l) (inc i)))))
+                                      end (when ci (dec (count ls)))]
+                                  (when (and ci end (< ci end))
+                                    (str/join "\n" (subvec (vec ls) ci end)))))))
+            ;; メンバーブロックに分割
+            all-members  (->> class-bodies
+                              (remove nil?)
+                              (mapcat split-class-body-blocks))
+            ;; フィールド：宣言行をキーに重複排除
+            unique-fields (->> all-members
+                               (filter field-block?)
+                               (reduce (fn [{:keys [seen fields]} block]
+                                         (let [k (field-decl-line block)]
+                                           (if (and k (not (contains? seen k)))
+                                             {:seen (conj seen k) :fields (conj fields block)}
+                                             {:seen seen :fields fields})))
+                                       {:seen #{} :fields []})
+                               :fields)
+            ;; @Test メソッド：メソッド名をキーに重複排除
+            unique-methods (->> all-members
+                                (remove field-block?)
+                                (filter #(some (fn [l] (str/includes? l "@Test")) %))
+                                (reduce (fn [{:keys [seen methods]} block]
+                                          (let [k (method-name block)]
+                                            (if (and k (not (contains? seen k)))
+                                              {:seen (conj seen k) :methods (conj methods block)}
+                                              {:seen seen :methods methods})))
+                                        {:seen #{} :methods []})
+                                :methods)
+            ;; ファイル組み立て
+            indent       "    "
+            field-str    (->> unique-fields
+                              (map #(str/join "\n" %))
+                              (str/join "\n\n"))
+            method-str   (->> unique-methods
+                              (map #(str/join "\n" %))
+                              (str/join "\n\n"))
+            out-str      (str pkg-line "\n\n"
+                              (str/join "\n" all-imports) "\n\n"
+                              (str/join "\n" class-annots) "\n"
+                              "class " class "Test {\n\n"
+                              field-str "\n\n"
+                              method-str "\n}\n")]
+        (spit out-path out-str)
+        (println (str "  生成: " class "Test.java (@Test×" (count unique-methods) ")"))
+        {:status :merged :class class :test-count (count unique-methods)}))))
+
+(defn merge-all-test-mds
+  "gen-tests/ 配下の全クラスフォルダに merge-test-mds を適用する。
+
+   opts:
+     :gen-dir - gen-tests の基底ディレクトリ
+     :force   - true の場合既存 .java を上書き
+
+   例:
+     (merge-all-test-mds
+       :gen-dir \"trials/experiments/2026-04-28-tradehub/exports/gen-tests\")"
+  [& {:keys [gen-dir force]}]
+  (let [class-dirs (->> (file-seq (java.io.File. gen-dir))
+                        (filter #(and (.isDirectory %)
+                                      (not= (.getPath %) gen-dir)))
+                        (filter #(some (fn [f] (str/ends-with? (.getName f) ".md"))
+                                       (.listFiles %)))
+                        sort)]
+    (println (str "[merge-all-test-mds] 対象クラス: " (count class-dirs)))
+    (mapv #(merge-test-mds
+             :class   (.getName %)
+             :gen-dir gen-dir
+             :force   force)
+          class-dirs)))

@@ -85,6 +85,15 @@
     (doseq [{:keys [class method]} results]
       (println (str "    " class "/" method)))))
 
+(defmethod run-phase! :generate/merge-tests [_ phase-spec]
+  (let [params  (:params phase-spec)
+        gen-dir (:gen-dir params)
+        force   (:force params false)
+        results (core/merge-all-test-mds :gen-dir gen-dir :force force)
+        merged  (filter #(= :merged (:status %)) results)
+        skipped (filter #(= :skipped (:status %)) results)]
+    (println (str "  統合完了: merged=" (count merged) " skipped=" (count skipped)))))
+
 (defmethod run-phase! :default [_ phase-spec]
   (throw (ex-info (str "Unknown phase: " (:phase phase-spec))
                   {:phase-spec phase-spec})))
