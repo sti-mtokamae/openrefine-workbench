@@ -283,16 +283,20 @@ cp gen-tests/DocumentAggregateServiceImpl/DocumentAggregateServiceImplTest.java 
 
 **既存テストがある場合（test-targets に含まれていたクラス）:**
 
-`gen-test` で個別生成したメソッドを既存の `*Test.java` に手動で追記します。  
-Mock フィールド（`@Mock`）は既存のものと重複しないよう確認してから追加してください。
+`patch-test-from-mds` を使って、生成済み md の `@Test` メソッドを既存ファイルに自動追記します。  
+手動コピーは不要です。
 
 ```clojure
-;; 既存テストのクラス構造が ai に渡るので Mock 配線が整合しやすい
-(println (core/gen-test "DocumentAggregateServiceImpl" :trial "my-project"
-                        :method "resolveTargetProcessId"))
+(core/patch-test-from-mds
+  :class     "ProjectServiceImpl"
+  :gen-dir   "trials/experiments/xxx/gen-tests"
+  :dest-file "trials/experiments/xxx/repo/common-lib/src/test/java/.../ProjectServiceImplTest.java")
+;; => {:status :patched, :class "ProjectServiceImpl", :added 24, :skipped-dup 0}
 ```
 
-### 2. コンパイルエラーを確認する
+同名メソッドの重複排除・クラスレベルの `@Disabled("AI生成テスト: 要修正")` の除去を自動で行います。
+
+### 3. コンパイルエラーを確認・修正する
 
 ```bash
 MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED" \
@@ -300,23 +304,47 @@ MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED" \
   ./mvnw test-compile -pl common-lib
 ```
 
-### 3. コンパイルエラーを AI で修正する（fix-tests-dir）
+コンパイルエラーの修正方法:
 
-`fix-tests-dir` はコンパイルエラーを自動取得して AI に渡し、テストシナリオを保持したまま修正します。
+- **AI で自動修正**（gen-tests/ 以下の新規生成 Test.java の場合）:
+  ```clojure
+  (core/fix-tests-dir
+    :gen-dir  "trials/experiments/xxx/gen-tests"
+    :trial    "my-project"
+    :src-root "trials/experiments/xxx/repo/common-lib/src/main/java"
+    :mvn-root "trials/experiments/xxx/repo"
+    :module   "common-lib")
+  ```
 
-```clojure
-(core/fix-tests-dir
-  :gen-dir  "trials/experiments/xxx/gen-tests"
-  :trial    "my-project"
-  :src-root "trials/experiments/xxx/repo/common-lib/src/main/java"
-  :mvn-root "trials/experiments/xxx/repo"
-  :module   "common-lib")
+- **既存テストへの追記（`patch-test-from-mds`）でエラーが出た場合**:  
+  AI 生成コードが存在しない型や private メソッドを参照しているケースが多い。  
+  `fix-test` でクラス単位に修正するか、エラー行のメソッドボディを `{}` に置換して `@Disabled` を付与する。
+
+コンパイルエラーが複数ラウンドにわたる場合は、test-compile → 修正を繰り返します。
+
+### 4. mvn test を実行して実行時失敗を把握する
+
+```bash
+MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED" \
+  guix shell 'openjdk@21:jdk' maven -- \
+  ./mvnw test -pl common-lib -Dtest=ProjectServiceImplTest
 ```
 
-コンパイルエラーが複数ラウンドにわたる場合は、test-compile → fix-tests-dir を繰り返します。  
-エラーが解消できないメソッドは `// TODO: fix` でボディをクリアして BUILD SUCCESS を優先します。
+### 5. 実行時失敗に @Disabled を付与する（disable-failing-tests）
 
-### 4. mvn verify を実行して JaCoCo レポートを生成する
+surefire XML を解析して失敗メソッドに `@Disabled` を自動付与します。  
+Mockito strict stubbing エラー・予期外例外など、修正コストが高い失敗を一括でスキップします。
+
+```clojure
+(core/disable-failing-tests
+  :class        "ProjectServiceImpl"
+  :surefire-dir "trials/experiments/xxx/repo/common-lib/target/surefire-reports"
+  :dest-file    "trials/experiments/xxx/repo/common-lib/src/test/java/.../ProjectServiceImplTest.java")
+```
+
+失敗が残る場合は 4→5 を繰り返します（`mvn test` で surefire XML が更新されます）。
+
+### 6. mvn verify を実行して JaCoCo レポートを生成する
 
 ```bash
 MAVEN_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED" \

@@ -666,7 +666,59 @@ JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届
 | `:force` | `true` のとき `dest-dir` に既存ファイルがあっても上書き（`fix-tests-dir` のみ） |
 | `:dry-run` | `true` のとき API を呼ばず対象ファイル一覧のみ表示（`fix-tests-dir` のみ） |
 
+### `patch-test-from-mds` — 既存テストへの追記
+
+既にリポジトリにある `*Test.java` に、per-method md から抽出した `@Test` メソッドを追記する。  
+`merge-all-test-mds`（新規生成）とは異なり、**既存ファイルを上書きしない**。
+
+```clojure
+(core/patch-test-from-mds
+  :class     "ProjectServiceImpl"
+  :gen-dir   "trials/experiments/2026-04-28-tradehub/exports/gen-tests"
+  :dest-file "trials/.../repo/common-lib/src/test/java/.../ProjectServiceImplTest.java")
+;; => {:status :patched, :class "ProjectServiceImpl", :added 24, :skipped-dup 0}
+```
+
+| オプション | 説明 |
+|---|---|
+| `:class` | クラス名（`gen-dir/<class>/` 以下の md を読む） |
+| `:gen-dir` | gen-tests の基底ディレクトリ |
+| `:dest-file` | 追記対象の既存 `*Test.java` ファイルパス |
+
+戻り値: `{:status :patched, :class c, :added n, :skipped-dup m}`
+
+---
+
+### `disable-failing-tests` — 実行時失敗への @Disabled 付与
+
+`mvn test` 後の surefire XML を解析し、失敗したテストメソッドに `@Disabled` を付与する。  
+`import org.junit.jupiter.api.Disabled;` が未存在の場合は自動補完する。
+
+```clojure
+(core/disable-failing-tests
+  :class        "ProjectServiceImpl"
+  :surefire-dir "trials/.../repo/common-lib/target/surefire-reports"
+  :dest-file    "trials/.../repo/common-lib/src/test/java/.../ProjectServiceImplTest.java")
+;; => {:status :done, :class "ProjectServiceImpl", :disabled 36, :not-found []}
+```
+
+| オプション | 説明 |
+|---|---|
+| `:class` | クラス名（surefire XML のファイル名フィルタにも使用） |
+| `:surefire-dir` | surefire-reports ディレクトリパス（`target/surefire-reports`） |
+| `:dest-file` | `@Disabled` を付与する `*Test.java` ファイルパス |
+
+戻り値: `{:status :done, :class c, :disabled n, :not-found [メソッド名…]}`  
+`:not-found` にメソッド名が含まれる場合、ファイル内で対応する `void methodName(` が見つからなかったことを示す（通常は既に `@Disabled` 済み）。
+
+> **注意**: `mvn test` を実行するたびに surefire XML は上書きされる。  
+> `disable-failing-tests` は必ず **最新の `mvn test` 直後** に実行すること。
+
+---
+
 ### テスト増幅の全体フロー
+
+#### A. 既存テストなし（新規生成）
 
 ```
 1. gen-tests-uncovered  → exports/gen-tests/<Class>/<method>.md  (AI 生成スケルトン)
@@ -679,9 +731,33 @@ JaCoCo XML レポートを解析して XTDB に取り込み、「テストが届
        ↓
 5. fix-tests-dir        → コンパイルエラーを AI で修正（反復）
        ↓
-6. mvn verify           → JaCoCo XML 生成
+6. mvn test             → surefire XML 生成
        ↓
-7. jacoco!              → XTDB に再投入
+7. disable-failing-tests → 実行時失敗に @Disabled を付与（必要に応じ 6→7 を反復）
        ↓
-8. uncovered-sql-methods → 残件確認 → 1. へ戻る
+8. mvn verify           → JaCoCo XML 生成
+       ↓
+9. jacoco!              → XTDB に再投入
+       ↓
+10. uncovered-sql-methods → 残件確認 → 1. へ戻る
+```
+
+#### B. 既存テストあり（追記方式）
+
+```
+1. gen-tests-uncovered  → exports/gen-tests/<Class>/<method>.md  (AI 生成スケルトン)
+       ↓
+2. patch-test-from-mds  → 既存 *Test.java に @Test メソッドを追記
+       ↓
+3. mvn test-compile     → コンパイルエラー確認
+       ↓
+4. fix-test（または手動）→ コンパイルエラーのあるメソッドを空化 + @Disabled
+       ↓
+5. mvn test             → surefire XML 生成
+       ↓
+6. disable-failing-tests → 実行時失敗に @Disabled を付与（必要に応じ 5→6 を反復）
+       ↓
+7. mvn verify           → JaCoCo XML 生成
+       ↓
+8. jacoco!              → XTDB に再投入
 ```
