@@ -134,6 +134,36 @@
   [& {:keys [trial cls method]}]
   (jref/jsigs (node) :trial trial :class cls :method method))
 
+(defn tref!
+  "テストクラス（*Test.java）の構造を解析して XTDB :test-refs テーブルに取り込む（差分同期・冪等）。
+
+   @InjectMocks → テスト対象クラス、@Mock/@MockBean → モック依存、
+   @Test/@ParameterizedTest → テストメソッド、@Disabled → 無効フラグ。
+
+   paths: テストソースディレクトリのベクタ
+   opts:
+     :trial - トライアル識別子
+
+   例:
+     (tref! [\"trials/experiments/2026-04-28-tradehub/repo/common-lib/src/test\"]
+            :trial \"2026-04-28-tradehub\")"
+  [paths & {:keys [trial]}]
+  (jref/tref! (node) paths :trial trial))
+
+(defn trefs
+  "XTDB :test-refs テーブルからテストメソッド情報を返す。
+   opts:
+     :trial    - トライアル識別子でフィルタ
+     :class    - テストクラス名でフィルタ
+     :target   - テスト対象クラス名でフィルタ
+     :disabled - true のとき @Disabled テストのみ返す
+
+   例:
+     (trefs :trial \"2026-04-28-tradehub\" :target \"DocumentAggregateServiceImpl\")
+     (trefs :trial \"2026-04-28-tradehub\" :disabled true)"
+  [& {:keys [trial class target disabled]}]
+  (jref/trefs (node) :trial trial :class class :target target :disabled disabled))
+
 (defn sqlref!
   "Java ソースの MyBatis @Select 等アノテーション SQL を解析して
    XTDB :sql-refs テーブルに取り込む。
@@ -1461,6 +1491,33 @@
                       :method   method
                       :sql-deps sqls}))))
          vec)))
+
+(defn test-targets
+  "未カバー × SQL縛りメソッドのうち、すでにテストメソッドが存在するクラスを返す。
+   「暗闇の中でどのfailureが意味のある失敗か」を特定するためのクエリ。
+
+   戻り値: [{:class \"DocumentAggregateServiceImpl\"
+             :uncovered-methods [\"resolveTargetProcessId\" ...]
+             :test-methods [{:tref/class ... :tref/method ... :tref/disabled? ...} ...]}]
+
+   opts:
+     :trial - トライアル識別子
+
+   例:
+     (test-targets :trial \"2026-04-28-tradehub\")"
+  [& {:keys [trial]}]
+  (let [uncovered (uncovered-sql-methods :trial trial)
+        tref-list (trefs :trial trial)
+        target-map (group-by :tref/target tref-list)]
+    (->> uncovered
+         (group-by :class)
+         (keep (fn [[cls methods]]
+                 (when-let [tests (get target-map cls)]
+                   {:class             cls
+                    :uncovered-methods (mapv :method methods)
+                    :test-methods      (mapv #(select-keys % [:tref/class :tref/method :tref/disabled?])
+                                            tests)})))
+         (sort-by #(count (:test-methods %)) >))))
 
 ;; -------------------------
 ;; phase tracking

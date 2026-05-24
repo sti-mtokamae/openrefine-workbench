@@ -343,3 +343,118 @@
       trial  (filter #(= trial (:jsig/trial %)))
       class  (filter #(= class (:jsig/class %)))
       method (filter #(= method (:jsig/method %))))))
+
+;; -------------------------
+;; テストクラス解析（:test-refs テーブル）
+;; -------------------------
+
+(defn- annotation-names
+  "ノードに付いたアノテーション名のセットを返す。"
+  [node]
+  (->> (.getAnnotations node)
+       (map #(.getNameAsString %))
+       set))
+
+(defn- field-type-str
+  "FieldDeclaration の最初の変数の型を文字列で返す。"
+  [^com.github.javaparser.ast.body.FieldDeclaration fd]
+  (-> fd .getVariables (.get 0) .getType .asString))
+
+(defn- extract-test-info
+  "1 つの *Test.java ファイルを解析し、:test-refs ドキュメントのシーケンスを返す。"
+  [^java.io.File f trial]
+  (try
+    (let [cu       (StaticJavaParser/parse f)
+          pkg      (-> cu .getPackageDeclaration
+                       (.map #(.getNameAsString %))
+                       (.orElse ""))
+          file-rel (.getPath f)]
+      (->> (.findAll cu ClassOrInterfaceDeclaration)
+           (filter #(not (.isInterface ^ClassOrInterfaceDeclaration %)))
+           (mapcat
+             (fn [^ClassOrInterfaceDeclaration cls]
+               (let [cls-name (.getNameAsString cls)
+                     fields   (.findAll cls FieldDeclaration)
+                     ;; @InjectMocks → テスト対象クラス（最初の1件）
+                     target   (->> fields
+                                   (filter #(contains? (annotation-names %) "InjectMocks"))
+                                   (map field-type-str)
+                                   first)
+                     ;; @Mock / @MockBean / @Spy / @SpyBean → モック依存
+                     mocks    (->> fields
+                                   (filter #(some (annotation-names %)
+                                                  ["Mock" "MockBean" "Spy" "SpyBean"]))
+                                   (mapv field-type-str))]
+                 ;; @Test / @ParameterizedTest が付いたメソッドだけ収集
+                 (->> (.findAll cls MethodDeclaration)
+                      (filter (fn [^MethodDeclaration md]
+                                (some (annotation-names md)
+                                      ["Test" "ParameterizedTest"])))
+                      (map (fn [^MethodDeclaration md]
+                             (let [mname     (.getNameAsString md)
+                                   anns      (annotation-names md)
+                                   disabled? (contains? anns "Disabled")]
+                               {:xt/id          (str "tref/" (or trial "_") "/" cls-name "/" mname)
+                                :tref/trial     trial
+                                :tref/class     cls-name
+                                :tref/method    mname
+                                :tref/target    target
+                                :tref/mocks     mocks
+                                :tref/disabled? (boolean disabled?)
+                                :tref/package   pkg
+                                :tref/file      file-rel})))))))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println (str "[tref] parse error: " (.getName f) " — " (.getMessage e))))
+      [])))
+
+(defn tref!
+  "テストクラス（*Test.java）の構造を解析して XTDB :test-refs テーブルに取り込む（差分同期・冪等）。
+
+   @InjectMocks フィールドからテスト対象クラスを、@Mock/@MockBean フィールドから
+   モック依存を抽出し、テストメソッド単位でドキュメントを生成する。
+
+   paths: 解析対象パスのベクタ（test ディレクトリを指定）
+   opts:
+     :trial - トライアル識別子
+
+   例:
+     (tref! node [\"trials/experiments/2026-04-28-tradehub/repo/common-lib/src/test\"]
+            :trial \"2026-04-28-tradehub\")"
+  [node paths & {:keys [trial]}]
+  (let [docs    (->> paths
+                     (mapcat (fn [root]
+                               (->> (java-files root)
+                                    (filter #(.endsWith (.getName ^java.io.File %) "Test.java"))
+                                    (mapcat #(extract-test-info % trial)))))
+                     vec)
+        new-ids (set (map :xt/id docs))
+        old-ids (->> (xt/q node '(from :test-refs [{:xt/id id :tref/trial t}]))
+                     (filter #(= (:t %) trial))
+                     (map :id)
+                     set)
+        to-del  (set/difference old-ids new-ids)]
+    (when (seq to-del)
+      (xt/execute-tx node (mapv #(vector :delete-docs :test-refs %) to-del)))
+    (doseq [batch (partition-all 2000 docs)]
+      (xt/execute-tx node (mapv #(vector :put-docs :test-refs %) batch)))
+    {:put (count docs) :delete (count to-del)}))
+
+(defn trefs
+  "XTDB :test-refs テーブルからテストメソッド情報を返す。
+   opts:
+     :trial    - トライアル識別子でフィルタ
+     :class    - テストクラス名でフィルタ（例: \"DocumentAggregateServiceImplTest\"）
+     :target   - テスト対象クラス名でフィルタ（例: \"DocumentAggregateServiceImpl\"）
+     :disabled - true のみ返す場合は true を指定
+
+   例:
+     (trefs node :trial \"2026-04-28-tradehub\" :target \"DocumentAggregateServiceImpl\")
+     (trefs node :trial \"2026-04-28-tradehub\" :disabled true)"
+  [node & {:keys [trial class target disabled]}]
+  (let [rs (xt/q node '(from :test-refs [*]))]
+    (cond->> rs
+      trial    (filter #(= trial (:tref/trial %)))
+      class    (filter #(= class (:tref/class %)))
+      target   (filter #(= target (:tref/target %)))
+      disabled (filter :tref/disabled?))))
