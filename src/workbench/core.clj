@@ -2211,9 +2211,18 @@
               (loop [test-iter 0]
                 (let [mvn (run-mvn-test! repo-root module class)]
                   (println (str "  test[" test-iter "]: " (:summary mvn)))
-                  (if (or (not (:failures? mvn)) (>= test-iter 5))
+                  (cond
+                    ;; 成功 or 上限
+                    (or (not (:failures? mvn)) (>= test-iter 5))
                     (assoc patch :fix-iters (:iters fix) :test-iters test-iter
                                  :success? (not (:failures? mvn)))
+                    ;; (no summary) = mvn test のコンパイル失敗の可能性 → 再 fix-compile
+                    (= "(no summary)" (:summary mvn))
+                    (let [fix2 (fix-compile-fast! dest repo-root module)]
+                      (println (str "  recompile: " (:iters fix2) " iters, clean=" (:clean? fix2)))
+                      (recur (inc test-iter)))
+                    ;; テスト失敗 → @Disabled 付与
+                    :else
                     (let [dis (disable-failing-tests
                                 :class class :surefire-dir surefire-dir :dest-file dest)]
                       (if (zero? (:disabled dis))
