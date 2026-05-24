@@ -963,7 +963,9 @@
                           (->> dep-cls-names
                                (keep #(when-let [vals (find-enum-values src-root %)]
                                         [% vals]))
-                               (into {})))]
+                               (into {})))
+        ;; 既存テストクラス（@InjectMocks でこのクラスを指している *Test.java）
+        existing-tests  (trefs :trial trial :target class-name)]
     {:trial           trial
      :class           class-name
      :method          method
@@ -975,7 +977,8 @@
      :sql-refs        sqls
      :coverage        cov
      :signatures      signatures
-     :src-imports     src-imports}))
+     :src-imports     src-imports
+     :existing-tests  existing-tests}))
 
 (defn gen-test
   "test-context の情報を AI に渡して JUnit 5 + Mockito テストコードを生成する。
@@ -1070,6 +1073,23 @@
             (map (fn [[cls vals]]
                    (str "  " cls ": " (str/join ", " vals)))
                  (:dep-enum-values ctx))))
+        ;; 既存テストクラスのサマリー（@InjectMocks が class-name を指しているもの）
+        existing-tests-txt
+        (when (seq (:existing-tests ctx))
+          (let [by-cls (group-by :tref/class (:existing-tests ctx))]
+            (str/join "\n"
+              (map (fn [[cls-name entries]]
+                     (let [pkg      (:tref/package (first entries))
+                           mocks    (distinct (:tref/mocks (first entries)))
+                           methods  (mapv :tref/method entries)
+                           disabled (filterv :tref/disabled? entries)]
+                       (str "テストクラス: " cls-name
+                            (when pkg (str " [package: " pkg "]"))
+                            "\n@Mock フィールド（重複追加禁止）: " (str/join ", " mocks)
+                            "\n既存テストメソッド（重複追加禁止）: " (str/join ", " methods)
+                            (when (seq disabled)
+                              (str "\n@Disabled メソッド: " (str/join ", " (map :tref/method disabled)))))))
+                   by-cls))))
         prompt
         (str "以下は Java クラス " target " の静的解析情報です。\n"
              "JUnit 5 + Mockito を使ったユニットテストコードを生成してください。\n\n"
@@ -1077,6 +1097,9 @@
              (when pkg (str "パッケージ: " pkg "\n"))
              "\n"
              (or import-txt "")
+             (when existing-tests-txt
+               (str "## 既存テストクラス（以下の構造に合わせてメソッドを追記すること。@Mock や既存メソッドは再宣言しない）\n"
+                    existing-tests-txt "\n\n"))
              "## メソッドシグネチャ\n" sig-txt "\n\n"
              "## 依存クラスのメソッドシグネチャ（引数の型・数・throws を厳守すること）\n" dep-sig-txt "\n\n"
              (when dep-enum-txt (str "## enum定数（記載のもののみ使うこと。記載外の定数は存在しない）\n" dep-enum-txt "\n\n"))
@@ -1085,8 +1108,12 @@
              "## JaCoCo カバレッジ（covered=0 = 完全未テスト）\n" cov-txt "\n\n"
              "## 要件\n"
              "- package 宣言を必ず先頭に含める\n"
-             "- JUnit 5 (@Test, @ExtendWith(MockitoExtension.class))\n"
-             "- @InjectMocks でテスト対象、@Mock で依存クラスをセットアップする\n"
+             (if existing-tests-txt
+               (str "- 「## 既存テストクラス」に記載のテストクラスにメソッドを追記する形で出力する\n"
+                    "- クラス宣言・@ExtendWith・@InjectMocks・既存 @Mock フィールドは出力しない（追記するメソッドのみ）\n"
+                    "- 既存テストメソッドと同名のメソッドは追加しない\n")
+               (str "- JUnit 5 (@Test, @ExtendWith(MockitoExtension.class))\n"
+                    "- @InjectMocks でテスト対象、@Mock で依存クラスをセットアップする\n"))
              "- Mock の型はインターフェース（*Service, *Mapper 等）を使い、*Impl クラスを直接 Mock しない\n"
              "- 直接依存に *Impl クラスが含まれる場合は Impl を除いた名前のインターフェースを @Mock に使う\n"
              "- Mockito (@Mock, @InjectMocks, when(...).thenReturn(...))\n"

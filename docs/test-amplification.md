@@ -144,13 +144,8 @@ Java ソース
 (core/jsig! ["trials/experiments/xxx/repo"] :trial "my-project")
 ;; => {:put 3415, :delete 0}
 
-;; テストクラス構造を投入（*Test.java → :test-refs）
-;; mvn test 実行前に実行すると「暗闇」解消に役立つ
-(core/tref! ["trials/experiments/xxx/repo/common-lib/src/test"]
-            :trial "my-project")
-;; => {:put 1549, :delete 0}
-
-;; テストクラス構造を投入（テストソースディレクトリを指定）
+;; テストクラス構造（@InjectMocks / @Mock / @Test の関係）
+;; mvn test 実行前に投入しておくと test-targets で「暗闇」解消に使える
 (core/tref! ["trials/experiments/xxx/repo/common-lib/src/test"]
             :trial "my-project")
 ;; => {:put 1549, :delete 0}
@@ -192,7 +187,7 @@ Java ソース
 
 「未カバー（JaCoCo）かつ SQL 縛りあり（MyBatis Mapper 経由）」のメソッドを対象に全件生成します。
 
-### 候補確認（dry-run）
+### 候補確認（dry-run）と分岐判断
 
 ```clojure
 (core/uncovered-sql-methods :trial "my-project")
@@ -202,11 +197,9 @@ Java ソース
 ;;     ...]
 ```
 
-### 「暗闇」の中の意味ある失敗を特定（test-targets）
+### 分岐: test-targets で「既存テストあり」を確認する
 
-`mvn test` を実行すると大量の failure が出るが、  
-「未カバーかつ SQL 縛りがある」クラスのテストが失敗しているなら、それは **意味のある失敗**です。  
-`test-targets` で優先度高いクラスを特定し、Mock 設定に集中できます。
+候補一覧を確認したら、`tref!` 投入済みであれば `test-targets` で分岐を判断します。
 
 ```clojure
 (core/test-targets :trial "my-project")
@@ -214,12 +207,20 @@ Java ソース
 ;;      :uncovered-methods ["resolveTargetProcessId" ...]
 ;;      :test-methods [{:tref/class "DocumentAggregateServiceImplTest"
 ;;                      :tref/method "testResolve_xxx"
-;;                      :tref/disabled? false} ...]}
+;;                      :tref/disabled? false} ...]}]
 ;;     ...]
 ```
 
+| test-targets の結果 | 対処 |
+|---|---|
+| クラスが **含まれる** | テストクラスは存在する → 既存 `*Test.java` に生成メソッドを追記 |
+| クラスが **含まれない** | テストクラスがない → `gen-tests-uncovered` で新規生成（次節） |
+
 返り値は `:test-methods` の件数降順でソートされます。  
-件数が多いクラスほど「テストはあるのに未カバーメソッドが残っている」 = Mock 設定が展開されていない可能性が高いクラスです。
+件数が多いクラスほど「テストはあるのに未カバーメソッドが残っている」= Mock 設定が展開されていない可能性が高いクラスです。  
+
+`mvn test` を実行すると大量の failure が出ますが、  
+`test-targets` に含まれるクラスの failure は **意味のある失敗**（Mock 補完で解消できる）です。
 
 ### 全件生成
 
@@ -267,7 +268,9 @@ gen-tests/
 
 ## 生成コードを使うまでの手順
 
-### 1. Test.java をテストディレクトリにコピーする
+### 1. Test.java を配置する
+
+**既存テストがない場合（test-targets に含まれなかったクラス）:**
 
 `merge-all-test-mds` で生成した `*Test.java` を、テスト対象クラスのパッケージパスと  
 **同じディレクトリ構造** に配置します。
@@ -276,6 +279,17 @@ gen-tests/
 # 例: DocumentAggregateServiceImpl → subtotal/service/impl/ パッケージ
 cp gen-tests/DocumentAggregateServiceImpl/DocumentAggregateServiceImplTest.java \
    repo/common-lib/src/test/java/com/example/subtotal/service/impl/
+```
+
+**既存テストがある場合（test-targets に含まれていたクラス）:**
+
+`gen-test` で個別生成したメソッドを既存の `*Test.java` に手動で追記します。  
+Mock フィールド（`@Mock`）は既存のものと重複しないよう確認してから追加してください。
+
+```clojure
+;; 既存テストのクラス構造が ai に渡るので Mock 配線が整合しやすい
+(println (core/gen-test "DocumentAggregateServiceImpl" :trial "my-project"
+                        :method "resolveTargetProcessId"))
 ```
 
 ### 2. コンパイルエラーを確認する
