@@ -1062,7 +1062,10 @@
              "- Mockito (@Mock, @InjectMocks, when(...).thenReturn(...))\n"
              "- covered=0 のメソッドを優先してテストする\n"
              "- SQL 縛りがある場合は Mapper の戻り値を Mock で制御するテストを含める\n"
-             "- getDeclaredMethod 等のリフレクションは使わない\n"
+             "- メソッドシグネチャに \"private\" と記載のメソッドは直接呼び出せないのでテスト対象から除外すること\n"
+             "- getDeclaredMethod / ReflectionTestUtils 等のリフレクションは使わない\n"
+             "- @SpringBootTest は使わない。@ExtendWith(MockitoExtension.class) だけで完結させること\n"
+             "- @Mock で宣言した依存クラスのメソッドはテスト内で使う前に必ず when(...).thenReturn(...) / doNothing() で stub すること（stub なしで呼び出すと NullPointerException になる）\n"
              "- テストクラス外にスタブクラスを定義しない\n"
              "- record クラスは mock() せず、コンストラクタで直接インスタンス化するか any() で引数マッチングする\n"
              "- stub する際、void メソッドには doNothing()、boolean/オブジェクト等の戻り値があるメソッドには when(...).thenReturn(...) を使うこと。doNothing() を void 以外のメソッドに使ってはならない\n"
@@ -1164,18 +1167,36 @@
    含まれるエラー行のみ返す。start-line は 1-based（Java コンパイラ出力形式）。"
   [err-txt start-line end-line]
   (when (seq err-txt)
-    (let [filtered (->> (str/split-lines err-txt)
-                        (filter (fn [line]
-                                  (if-let [[_ ln] (re-find #"\[(\d+),\d+\]" line)]
-                                    (let [n (Long/parseLong ln)]
-                                      (and (>= n start-line) (< n end-line)))
-                                    true))))]  ; 行番号なし行は常に含める
-      (when (seq filtered) (str/join "\n" filtered)))))
+    (let [lines (str/split-lines err-txt)
+          in-range? (fn [n] (and (>= n start-line) (< n end-line)))
+          has-compile-fmt? (some #(re-find #"\[\d+,\d+\]" %) lines)]
+      (if has-compile-fmt?
+        ;; compile error モード（元の動作）
+        (let [filtered (->> lines
+                            (filter (fn [line]
+                                      (if-let [[_ ln] (re-find #"\[(\d+),\d+\]" line)]
+                                        (in-range? (Long/parseLong ln))
+                                        true))))]
+          (when (seq filtered) (str/join "\n" filtered)))
+        ;; surefire runtime error モード：空行でブロック分割 → 範囲内行番号を持つブロックのみ返す
+        (let [blocks (->> (partition-by str/blank? lines)
+                          (remove #(every? str/blank? %))
+                          (map #(str/join "\n" %)))
+              ;; 非フレームワーク .java:NN で範囲内かチェック
+              block-in-range?
+              (fn [block]
+                (some (fn [l]
+                        (when-let [[_ ln] (re-find #"\.java:(\d+)\)" l)]
+                          (when-not (re-find #"\tat (org\.junit|org\.mockito|org\.springframework|java\.|com\.fasterxml|sun\.|jdk\.)" l)
+                            (in-range? (Long/parseLong ln)))))
+                      (str/split-lines block)))
+              matching (filter block-in-range? blocks)]
+          (when (seq matching) (str/join "\n\n" matching)))))))
 
 (defn- fix-method-single
   "テストメソッド 1 本を AI で修正し、修正済みメソッドコードを返す。
    エラーがないメソッドは original-code をそのまま返す。"
-  [header-snippet method-code err-txt import-txt dep-sig-txt dep-enum-txt model]
+  [header-snippet method-code err-txt import-txt dep-sig-txt dep-enum-txt model & {:keys [extra-context]}]
   (if-not (seq err-txt)
     method-code
     (let [prompt
@@ -1188,6 +1209,8 @@
                "```java\n" method-code "\n```\n\n"
                "## コンパイルエラー\n" err-txt "\n\n"
                "## 正確な情報\n\n"
+               (when (seq extra-context)
+                 (str "### 追加コンテキスト（必ず遵守すること）\n" extra-context "\n\n"))
                "### 実際の import（ここにない型は使ってはいけない）\n"
                (if (seq import-txt) import-txt "  (情報なし)") "\n\n"
                "### 依存クラスの正確なメソッドシグネチャ\n"
@@ -1197,7 +1220,11 @@
                "## 修正ルール\n"
                "- @Test アノテーションからメソッド末尾の } まで（メソッド本体のみ）を返すこと\n"
                "- クラス定義・import・クラス閉じ括弧は含めないこと\n"
-               "- コードブロック (```java ... ```) は不要。Java コードのみ返すこと")]
+               "- コードブロック (```java ... ```) は不要。Java コードのみ返すこと\n"
+               "- private メソッドは直接呼び出せないため、呼び出しを削除してテストを @Disabled にするか、テスト内容を public メソッド経由で検証するように書き換えること\n"
+               "- ReflectionTestUtils / getDeclaredMethod 等のリフレクションは使わない\n"
+               "- @SpringBootTest は使わない。@ExtendWith(MockitoExtension.class) だけで完結させること\n"
+               "- @Mock で宣言した依存クラスのメソッドは使う前に必ず when(...).thenReturn(...) / doNothing() で stub すること（stub なしは NullPointerException の原因になる）")]
       (codegen/chat-complete
        [{:role "system"
          :content "あなたは Java テストコードの修正専門家です。指定されたメソッドのみを修正します。"}
@@ -1224,7 +1251,7 @@
        :java-path \"trials/experiments/2026-04-28-tradehub/exports/gen-tests/ActivityRecordServiceImpl/ActivityRecordServiceImplTest.java\"
        :mvn-root  \"trials/experiments/2026-04-28-tradehub/repo\"
        :module    \"common-lib\")"
-  [class-name & {:keys [trial src-root java-path mvn-root module errors model]}]
+  [class-name & {:keys [trial src-root java-path mvn-root module errors model extra-context]}]
   (let [existing-code (slurp java-path)
         err-txt       (or errors
                           (when mvn-root
@@ -1295,7 +1322,8 @@
                            (println (str "    修正: メソッド #" (inc idx)
                                         " (L" (inc start) "-" end ") errors=true"))
                            (fix-method-single header-snippet code m-err
-                                              import-txt dep-sig-txt dep-enum-txt model))
+                                              import-txt dep-sig-txt dep-enum-txt model
+                                              :extra-context extra-context))
                          (do
                            (println (str "    スキップ: メソッド #" (inc idx)
                                         " (L" (inc start) "-" end ") errors=none"))
@@ -1324,6 +1352,8 @@
                  (when dep-enum-txt
                    (str "### enum定数（記載のもののみ有効。記載外の定数名は存在しない）\n"
                         dep-enum-txt "\n\n"))
+                 (when (seq extra-context)
+                   (str "### 追加コンテキスト（必ず遵守すること）\n" extra-context "\n\n"))
                  "## 修正ルール\n"
                  "- import は上記「実際の import」からのみ選ぶこと\n"
                  "- メソッド呼び出しの引数型・数は「正確なメソッドシグネチャ」に従うこと\n"

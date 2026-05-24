@@ -5,17 +5,17 @@
 (def src-root "trials/experiments/2026-04-28-tradehub/repo/common-lib/src/main/java")
 (def mvn-root "trials/experiments/2026-04-28-tradehub/repo")
 (def module   "common-lib")
-(def class-name "DocumentsServiceImpl")
+(def class-name "DocumentsVerificationDataServiceImpl")
 (def java-path
-  "trials/experiments/2026-04-28-tradehub/exports/gen-tests/DocumentsServiceImpl/DocumentsServiceImplTest.java")
+  "trials/experiments/2026-04-28-tradehub/exports/gen-tests/DocumentsVerificationDataServiceImpl/DocumentsVerificationDataServiceImplTest.java")
 (def test-dir
   "trials/experiments/2026-04-28-tradehub/repo/common-lib/src/test/java/com/tradehub/web/document/service/impl")
 
 ;; test-dir にコピーしてからコンパイルエラーを取得する
 (println "== コピー → テストディレクトリ ==")
-(clojure.java.io/make-parents (str test-dir "/DocumentsServiceImplTest.java"))
+(clojure.java.io/make-parents (str test-dir "/DocumentsVerificationDataServiceImplTest.java"))
 (clojure.java.io/copy (clojure.java.io/file java-path)
-                      (clojure.java.io/file (str test-dir "/DocumentsServiceImplTest.java")))
+                      (clojure.java.io/file (str test-dir "/DocumentsVerificationDataServiceImplTest.java")))
 
 (println (str "=== fix-test 実行中: " class-name " ==="))
 (let [fixed (workbench.core/fix-test class-name

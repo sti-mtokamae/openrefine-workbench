@@ -124,7 +124,7 @@
     (xt/execute-tx node
       (vec
        (concat
-        (mapv (fn [id] [:delete :jacoco id]) to-delete)
+        (mapv (fn [id] [:delete-docs :jacoco id]) to-delete)
         (mapv (fn [doc] [:put-docs :jacoco doc]) to-put))))
     {:put    (count to-put)
      :delete (count to-delete)}))
