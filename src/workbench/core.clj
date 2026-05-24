@@ -13,6 +13,7 @@
    [clojure.java.io     :as io]
    [clojure.java.shell  :refer [sh]]
    [clojure.string      :as str]
+   [clojure.xml]
    [workbench.codegen   :as codegen]
    [workbench.ingest    :as ingest]
    [workbench.jacoco    :as jacoco]
@@ -1984,3 +1985,109 @@
     (spit dest-file patched)
     (println (str "  " class ": " (count to-add) " メソッド追加, " skipped " 件スキップ（重複）"))
     {:status :patched :class class :added (count to-add) :skipped-dup skipped}))
+
+;; -------------------------
+;; surefire 失敗テスト @Disabled 化
+;; -------------------------
+
+(defn- parse-surefire-failures
+  "surefire-reports/ 配下の XML を解析し、指定クラス名を含む
+   testcase 要素のうち failure/error 子を持つものの name 属性（メソッド名）を
+   集合で返す。clojure.xml/parse で正確に解析する。"
+  [surefire-dir class-name]
+  (let [xml-files (->> (file-seq (io/file surefire-dir))
+                       (filter #(and (.isFile %)
+                                     (str/ends-with? (.getName %) ".xml")
+                                     ;; クラス名を含むファイルのみ対象（高速化）
+                                     (str/includes? (.getName %) class-name))))]
+    (->> xml-files
+         (mapcat (fn [f]
+                   (try
+                     (let [root (clojure.xml/parse f)]
+                       (->> (:content root)
+                            (filter #(= :testcase (:tag %)))
+                            (filter (fn [tc]
+                                      (and (seq (:content tc))
+                                           (some #(#{:failure :error} (:tag %))
+                                                 (:content tc)))))
+                            (map #(get-in % [:attrs :name]))))
+                     (catch Exception e
+                       (println (str "  ⚠ XML 解析失敗: " (.getName f) " - " (.getMessage e)))
+                       []))))
+         (into #{}))))
+
+(defn- ensure-disabled-import
+  "ファイル文字列に Disabled の import がなければ追加する。"
+  [content]
+  (if (str/includes? content "import org.junit.jupiter.api.Disabled")
+    content
+    (str/replace-first content
+                        #"(?m)^import "
+                        "import org.junit.jupiter.api.Disabled;\nimport ")))
+
+(defn- add-disabled-to-method
+  "content 文字列の中で method-name に対応する @Test アノテーション行の
+   直前（既に @Disabled がない場合のみ）に @Disabled を挿入して返す。"
+  [content method-name]
+  (let [lines  (str/split-lines content)
+        n      (count lines)]
+    (loop [i 0 result []]
+      (if (>= i n)
+        (str/join "\n" result)
+        (let [line (nth lines i)]
+          (if (re-find (re-pattern (str "\\bvoid\\s+" (java.util.regex.Pattern/quote method-name) "\\s*\\(")) line)
+            ;; メソッド定義行を発見 → 直上の @Test を探す
+            (let [;; result の末尾から @Test を探す
+                  test-idx (loop [j (dec (count result))]
+                              (cond
+                                (< j 0)                                    nil
+                                (re-find #"@Test\b" (nth result j))        j
+                                (re-find #"@\w" (nth result j))            nil  ; 別のアノテーション
+                                :else                                      (recur (dec j))))
+                  already? (when test-idx
+                              (some #(str/includes? % "@Disabled")
+                                    (subvec result (max 0 (- test-idx 3)) test-idx)))]
+              (if (and test-idx (not already?))
+                (let [indent (or (re-find #"^\s+" (nth result test-idx)) "    ")
+                      before (subvec result 0 test-idx)
+                      after  (subvec result test-idx)]
+                  (recur (inc i) (-> before
+                                     (conj (str indent "@Disabled(\"runtime-failure: AI generated\")"))
+                                     (into after)
+                                     (conj line))))
+                (recur (inc i) (conj result line))))
+            (recur (inc i) (conj result line))))))))
+
+(defn disable-failing-tests
+  "surefire-reports の XML を解析して失敗メソッドを特定し、
+   テストファイルの各メソッドに @Disabled を付与する。
+   import も自動補完する。
+
+   opts:
+     :class         - クラス名（例 \"DocumentImportServiceImpl\"）
+     :surefire-dir  - surefire-reports ディレクトリパス
+     :dest-file     - 更新対象の Java テストファイルパス
+
+   戻り値: {:status :done :class class :disabled n :not-found ms}"
+  [& {:keys [class surefire-dir dest-file]}]
+  (let [failed (parse-surefire-failures surefire-dir class)]
+    (if (empty? failed)
+      (do (println (str "  " class ": 失敗テストなし（または surefire XML が存在しない）"))
+          {:status :done :class class :disabled 0 :not-found []})
+      (let [content0 (slurp dest-file)
+            content1 (ensure-disabled-import content0)
+            ;; 各失敗メソッドに @Disabled を追加
+            {:keys [content not-found]}
+            (reduce (fn [{:keys [content not-found]} m]
+                      (let [next (add-disabled-to-method content m)]
+                        (if (= next content)
+                          {:content content :not-found (conj not-found m)}
+                          {:content next    :not-found not-found})))
+                    {:content content1 :not-found []}
+                    (sort failed))]
+        (spit dest-file content)
+        (println (str "  " class ": @Disabled 追加 " (- (count failed) (count not-found))
+                      " 件" (when (seq not-found) (str ", 未発見: " not-found))))
+        {:status :done :class class
+         :disabled (- (count failed) (count not-found))
+         :not-found not-found}))))
