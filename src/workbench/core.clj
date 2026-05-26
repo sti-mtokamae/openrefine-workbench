@@ -2286,7 +2286,8 @@
       (do
         (println (str "\n=== " class " ==="))
         (let [patch (patch-test-from-mds :class class :gen-dir gen-dir :dest-file dest)]
-          (if (zero? (:added patch))
+          (if (and (zero? (:added patch))
+                   (:clean? (fix-compile-fast! dest repo-root module)))
             (assoc patch :fix-iters 0 :test-iters 0 :success? true)
             ;; compile fix
             (let [fix (fix-compile-fast! dest repo-root module)]
