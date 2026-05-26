@@ -2350,3 +2350,169 @@
       (println (str "\n--- 完了 ---"))
       (println (str "成功: " ok " / スキップ(追加なし): " skip " / エラー: " err))
       results)))
+
+;; -------------------------
+;; @Disabled 再生成
+;; -------------------------
+
+(defn- disabled-method->prod-method
+  "テストメソッド名からプロダクションメソッド名を推定する。
+   例: testIsSubtotalProject_NullProjectId → isSubtotalProject
+       getDocumentById_success            → getDocumentById"
+  [test-method]
+  (let [no-test (if (str/starts-with? test-method "test")
+                  (subs test-method 4)
+                  test-method)
+        base    (first (str/split no-test #"_"))]
+    (when (seq base)
+      (str (str/lower-case (subs base 0 1))
+           (subs base 1)))))
+
+(defn- remove-ai-disabled-blocks!
+  "Java テストファイルから @Disabled(\"runtime-failure|compile-error: AI generated\")
+   の付いた @Test メソッドブロックを除去して上書きする。
+   戻り値: 除去したメソッド名のベクタ"
+  [^java.io.File java-file]
+  (let [content (slurp java-file)
+        lines   (str/split-lines content)
+        n       (count lines)
+        removed (atom [])]
+    (loop [i 0 out []]
+      (if (>= i n)
+        (do (spit java-file (str (str/join "\n" out) "\n"))
+            @removed)
+        (let [line (nth lines i)]
+          (if (re-find #"@Disabled\(\"(runtime-failure|compile-error): AI generated\"\)" line)
+            ;; ① out の末尾からアノテーション行・空行・Javadoc を除去（@Test を含む）
+            (let [out' (vec (reverse
+                              (drop-while (fn [l]
+                                            (let [t (str/trim l)]
+                                              (or (str/blank? t)
+                                                  (str/starts-with? t "@")
+                                                  (str/starts-with? t "/*")
+                                                  (str/starts-with? t "*"))))
+                                          (reverse out))))
+                  ;; ② メソッド名を記録: @Disabled の前後の行を走査してシグネチャ行を探す
+                  sig-pattern #"(?:public\s+|protected\s+|private\s+)?(?:static\s+)?(?:\w+\s+)?(\w+)\s*\("
+                  method-name (or
+                                ;; @Disabled より前 (out' 末尾方向を探す)
+                                (some #(second (re-find sig-pattern (str/trim %)))
+                                      (take-last 3 out'))
+                                ;; @Disabled より後 (i+1, i+2, i+3 を探す)
+                                (some #(when (< % n)
+                                         (second (re-find sig-pattern
+                                                          (str/trim (nth lines %)))))
+                                      [(inc i) (+ i 2) (+ i 3)]))]
+              (when method-name (swap! removed conj method-name))
+              ;; ③ @Disabled 行から始めてメソッド終端を探す（ブレース深さカウント）
+              (let [end-idx (loop [j i depth 0 started? false]
+                              (if (>= j n)
+                                j
+                                (let [l      (nth lines j)
+                                      opens  (count (re-seq #"\{" l))
+                                      closes (count (re-seq #"\}" l))
+                                      new-d  (+ depth opens (- closes))]
+                                  (cond
+                                    (and (not started?) (pos? opens))
+                                    (if (<= new-d 0) (inc j) (recur (inc j) new-d true))
+                                    started?
+                                    (if (<= new-d 0) (inc j) (recur (inc j) new-d true))
+                                    :else (recur (inc j) depth false)))))]
+                (recur end-idx out')))
+            (recur (inc i) (conj out line))))))))
+
+(defn regen-disabled!
+  "@Disabled(\"AI generated\") テストを除去して AI で再生成・再検証する。
+
+   ① テストファイルから @Disabled ブロックを除去
+   ② 対応するプロダクションメソッドの .md を :force true で再生成
+   ③ amplify-class! で追加・コンパイル・テスト検証
+
+   opts:
+     :class       - 対象クラス名（例 \"DocumentAggregateServiceImpl\"）
+     :gen-dir     - gen-tests 基底ディレクトリ
+     :repo-root   - mvnw があるディレクトリ
+     :module      - Maven モジュール名
+     :trial       - :test-refs の trial 識別子
+     :src-root    - jsig 検索用 Java ソースルート
+     :jacoco-trial - JaCoCo trial 識別子（省略時は :trial と同じ）
+
+   例:
+     (regen-disabled!
+       :class       \"DocumentAggregateServiceImpl\"
+       :gen-dir     \"trials/experiments/2026-04-28-tradehub/exports/gen-tests\"
+       :repo-root   \"trials/experiments/2026-04-28-tradehub/repo\"
+       :module      \"common-lib\"
+       :trial       \"2026-04-28-tradehub\"
+       :src-root    \"trials/experiments/2026-04-28-tradehub/repo/common-lib/src/main/java\")"
+  [& {:keys [class gen-dir repo-root module trial src-root jacoco-trial]}]
+  (let [module-root  (str repo-root "/" module)
+        gen-class-dir (io/file gen-dir class)
+        java-file    (find-test-java module-root class)]
+    (when-not java-file
+      (throw (ex-info (str "テストファイルが見つかりません: " class) {:class class})))
+    (println (str "\n=== regen-disabled! [" class "] ==="))
+    ;; ① @Disabled ブロック除去
+    (let [removed (remove-ai-disabled-blocks! java-file)]
+      (println (str "  除去: " (count removed) " メソッド → " removed))
+      ;; ② 対応 .md を再生成（prod-method を推定して gen-test）
+      (let [prod-methods (->> removed
+                              (map disabled-method->prod-method)
+                              (filter some?)
+                              distinct)
+            regen-count  (atom 0)]
+        (doseq [pm prod-methods]
+          (try
+            (let [md-file (io/file gen-class-dir (str pm ".md"))]
+              (println (str "  .md 再生成: " pm))
+              (let [skeleton (gen-test class
+                                      :trial (or jacoco-trial trial)
+                                      :method pm
+                                      :src-root src-root)]
+                (when skeleton
+                  (io/make-parents md-file)
+                  (spit md-file skeleton)
+                  (swap! regen-count inc))))
+            (catch Exception e
+              (println (str "  [WARN] gen-test 失敗 (" pm "): " (.getMessage e))))))
+        (println (str "  .md 再生成完了: " @regen-count "/" (count prod-methods) " 件"))
+        ;; ③ amplify-class! で追加・コンパイル・テスト
+        (amplify-class! :class class :gen-dir gen-dir
+                        :repo-root repo-root :module module)))))
+
+(defn regen-disabled-all!
+  "disabled-report で 🔴 高 優先（coverage-pct=0）のクラスに regen-disabled! を一括適用する。
+
+   opts:
+     :gen-dir      - gen-tests 基底ディレクトリ
+     :repo-root    - mvnw があるディレクトリ
+     :module       - Maven モジュール名
+     :trial        - :test-refs の trial 識別子
+     :src-root     - jsig 検索用 Java ソースルート
+     :jacoco-trial - JaCoCo trial 識別子（省略時は :trial と同じ）
+     :classes      - 対象クラス名リスト（省略時は disabled-report の 🔴 高 クラス）
+
+   例:
+     (regen-disabled-all!
+       :gen-dir      \"trials/experiments/2026-04-28-tradehub/exports/gen-tests\"
+       :repo-root    \"trials/experiments/2026-04-28-tradehub/repo\"
+       :module       \"common-lib\"
+       :trial        \"2026-04-28-tradehub\"
+       :src-root     \"trials/experiments/2026-04-28-tradehub/repo/common-lib/src/main/java\"
+       :jacoco-trial \"tradehub\")"
+  [& {:keys [gen-dir repo-root module trial src-root jacoco-trial classes]}]
+  (let [targets (or classes
+                    (->> (disabled-report :trial trial
+                                          :jacoco-trial (or jacoco-trial trial)
+                                          :print? false)
+                         (filter #(zero? (:coverage-pct %)))
+                         (map :target)))]
+    (println (str "=== regen-disabled-all! 対象: " (count targets) " クラス ==="))
+    (doseq [cls targets]
+      (try
+        (regen-disabled! :class cls :gen-dir gen-dir :repo-root repo-root
+                         :module module :trial trial :src-root src-root
+                         :jacoco-trial jacoco-trial)
+        (catch Exception e
+          (println (str "ERROR [" cls "]: " (.getMessage e))))))))
+
