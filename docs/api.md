@@ -145,6 +145,29 @@ REPL / AI Agent 向けの統合エントリポイント。
 
 ---
 
+
+---
+
+## Javaコンパイルエラー判定 API
+
+| 関数 | 説明 |
+|---|---|
+| `(core/compile-errors-dir! root)` | 指定ディレクトリ以下の全JavaファイルをDiagnosticCollectorでチェックし、エラー情報をXTDBに格納する |
+| `(core/compile-ok-java-files root)` | コンパイルエラーがないJavaファイルのパスだけをベクタで返す |
+
+### 使用例
+
+```clojure
+;; Javaファイルのコンパイルエラーをチェック
+(core/compile-errors-dir! "trials/experiments/2026-04-28-tradehub/repo")
+
+;; コンパイル成功したファイルのみ取得
+(core/compile-ok-java-files "trials/experiments/2026-04-28-tradehub/repo")
+```
+
+- `compile-errors-dir!` は各ファイルごとに `{:file ... :errors [...]}` のベクタを返します。
+- `compile-ok-java-files` は `:errors` が空のファイルのみ抽出します。
+
 ## テーブルスキーマ
 
 ### `:files` テーブル（`ingest!` で投入）

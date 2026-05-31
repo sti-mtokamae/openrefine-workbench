@@ -7,7 +7,22 @@
    [clojure.set :as set]
    [clojure.string :as str]
    [clj-xref.core :as xref]
-   [xtdb.api :as xt]))
+   [xtdb.api :as xt]
+   [workbench.javac :as javac]))
+
+;; --------------------------------------------------
+;; Java compile errors (DiagnosticCollector連携 PoC)
+;; --------------------------------------------------
+
+(defn compile-errors-dir!
+  "指定ディレクトリ以下の全JavaファイルをDiagnosticCollectorでチェックし、
+  エラー情報をXTDBに格納するPoC関数。
+  node: XTDBノード, root: ルートディレクトリパス"
+  [node root]
+  (let [root-file (io/file root)
+        java-files (->> (file-seq root-file)
+                        (filter #(and (.isFile ^java.io.File %) (str/ends-with? (.getName %) ".java"))))]
+    (mapv #(javac/compile-errors-to-xtdb! node (.getAbsolutePath ^java.io.File %)) java-files)))
 
 ;; -------------------------
 ;; helpers

@@ -351,7 +351,26 @@ workbench.core/tree
 
 ---
 
-## 8. グラフを Gephi で可視化する
+## 8. Javaファイルのコンパイルチェックをパイプラインに組み込む
+
+1. `compile-errors-dir!` で全Javaファイルのコンパイルエラーを収集
+2. `compile-ok-java-files` でエラーなしファイルのみを次工程（参照解析など）に渡す
+
+### 例
+
+```clojure
+;; 1. コンパイルエラー収集
+(def errs (core/compile-errors-dir! "trials/experiments/2026-04-28-tradehub/repo"))
+;; 2. コンパイル成功ファイルのみで参照解析
+(def ok-files (core/compile-ok-java-files "trials/experiments/2026-04-28-tradehub/repo"))
+(core/jref! ok-files :trial "tradehub")
+```
+
+これにより、**コンパイル失敗ファイルを除外した安全な参照解析パイプライン**が実現できます。
+
+---
+
+## 9. グラフを Gephi で可視化する
 
 千クラス・万メソッド規模のコードベースはテキスト出力では全体像を掴みにくい。
 `export-gexf!` で GEXF ファイルを出力し、Gephi（Windows 推奨）で可視化する。
@@ -401,7 +420,7 @@ workbench.core/tree
 
 ---
 
-## 9. 後片付け
+## 10. 後片付け
 
 ```clojure
 (core/stop!)
@@ -409,7 +428,7 @@ workbench.core/tree
 
 ---
 
-## 10. SQL 縛り解析（MyBatis Mapper）
+## 11. SQL 縛り解析（MyBatis Mapper）
 
 MyBatis の `@Select` 等アノテーションを静的解析して、どの Mapper がどの列条件を持つかを抽出する。
 
@@ -437,7 +456,7 @@ MyBatis の `@Select` 等アノテーションを静的解析して、どの Map
 
 ---
 
-## 11. 共変更解析（git co-change）
+## 12. 共変更解析（git co-change）
 
 コミット履歴から「一緒に変更されるファイルペア」を集計し、
 静的解析（call graph）では見えない暗黙の結合を炙り出す。
@@ -485,7 +504,7 @@ MyBatis の `@Select` 等アノテーションを静的解析して、どの Map
 
 ---
 
-## 12. SQL 変更影響レポート（sql-impact-report）
+## 13. SQL 変更影響レポート（sql-impact-report）
 
 SQL の縛り条件パターンを起点に呼び出しグラフを遡り、
 変更影響を fan-in・レイヤー・cochange 回数付きで可視化する。
@@ -524,7 +543,7 @@ SQL の縛り条件パターンを起点に呼び出しグラフを遡り、
 
 ---
 
-## 13. 注目クラス深堀り（impact / deps / cochange）
+## 14. 注目クラス深堀り（impact / deps / cochange）
 
 fan-in 上位や cochange 上位のクラスを選んで 1 ホップの呼び出し元・呼び出し先・共変更パートナーを確認する。
 

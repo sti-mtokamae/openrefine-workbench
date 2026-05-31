@@ -24,9 +24,10 @@
    [xtdb.api            :as xt]
    [xtdb.node           :as xtn]))
 
-;; -------------------------
+
+;; ------------------------- 
 ;; node lifecycle
-;; -------------------------
+;; ------------------------- 
 
 (defonce ^:private state (atom nil))
 
@@ -72,6 +73,25 @@
   "現在の XTDB ノードを返す。未起動なら start! を呼ぶこと。"
   []
   (or @state (throw (ex-info "node not started — call (start!) first" {}))))
+
+;; -------------------------
+;; Java compile error check (re-export)
+;; -------------------------
+
+(defn compile-errors-dir!
+  "指定ディレクトリ以下の全JavaファイルをDiagnosticCollectorでチェックし、
+    エラー情報をXTDBに格納する。"
+  [root]
+  (ingest/compile-errors-dir! (node) root))
+
+;; compile-ok-java-files: compile-errors-dir! でエラーが空のファイルのみ返す
+(defn compile-ok-java-files
+  "指定ディレクトリ以下の全Javaファイルのうち、コンパイルエラーがないファイルパスのベクタを返す。"
+  [root]
+  (let [errs (ingest/compile-errors-dir! (node) root)]
+    (->> errs
+         (filter #(empty? (:errors %)))
+         (mapv :file))))
 
 ;; -------------------------
 ;; ingest

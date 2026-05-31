@@ -41,10 +41,21 @@
   (let [n (core/jacoco! (get-in phase-spec [:params :jacoco-xml]) :trial (:trial/id trial))]
     (println (str "  jacocos: " n))))
 
+
+;; AI生成テストのjavacチェック（compile-errors-dir!）
+(defmethod run-phase! :ingest/compile-errors-gen-tests [trial phase-spec]
+  (let [{:keys [java-root]} (:params phase-spec)
+        n (core/compile-errors-dir! java-root)]
+    (println (str "  compile errors checked: " (count n) " files"))))
+
+;; コンパイルOKなファイルだけref投入
 (defmethod run-phase! :ingest/jref-gen-tests [trial phase-spec]
   (let [{:keys [java-root]} (:params phase-spec)
-        n (core/jref! [java-root] :trial (:trial/id trial) :tag "gen-tests")]
-    (println (str "  gen-test refs: " n))))
+        ok-files (core/compile-ok-java-files java-root)
+        n (if (seq ok-files)
+            (core/jref! ok-files :trial (:trial/id trial) :tag "gen-tests")
+            0)]
+    (println (str "  gen-test refs (compile OK only): " n))))
 
 ;; -------------------------
 ;; analyze フェーズ
@@ -194,7 +205,8 @@
                 (when tracked?
                   (core/mark-phase! trial-id phase :failed))
                 (println (str "[" phase "] FAILED: " (ex-message ex)))
-                (throw ex)))))))))
+                ;; throwせず次のフェーズへ進む
+              ))))))))
 
 ;; -------------------------
 ;; エントリポイント

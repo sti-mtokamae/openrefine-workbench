@@ -192,9 +192,9 @@
         (concat
           (map #(call->doc % rel trial field-map iface-impl-map :tag tag) calls)
           (map #(new->doc % rel trial :tag tag) news)))
-      (catch Exception e
-        (binding [*out* *err*]
-          (println (str "[jref] parse error: " rel " — " (.getMessage e))))
+
+      (catch Throwable e
+        (println (str "[jref] parse error: " rel " — " (.getMessage e)))
         []))))
 
 ;; -------------------------
@@ -299,9 +299,9 @@
                              methods  (->> (.findAll rec MethodDeclaration)
                                           (map #(method->sig-doc % cls-name pkg trial)))]
                          (concat accessors methods)))))))
+
     (catch Exception e
-      (binding [*out* *err*]
-        (println (str "[jsig] parse error: " (.getName f) " — " (.getMessage e))))
+      (println (str "[jsig] parse error: " (.getName f) " — " (.getMessage e)))
       [])))
 
 (defn jsig!
@@ -382,9 +382,9 @@
                      (let [cls-name (.getNameAsString cls)]
                        (->> (.findAll cls MethodDeclaration)
                             (keep #(method->body-doc % cls-name pkg trial))))))))
+
     (catch Exception e
-      (binding [*out* *err*]
-        (println (str "[jbody] parse error: " (.getName f) " — " (.getMessage e))))
+      (println (str "[jbody] parse error: " (.getName f) " — " (.getMessage e)))
       [])))
 
 (defn jbody!
@@ -488,9 +488,9 @@
                                 :tref/disabled? (boolean disabled?)
                                 :tref/package   pkg
                                 :tref/file      file-rel})))))))))
+
     (catch Exception e
-      (binding [*out* *err*]
-        (println (str "[tref] parse error: " (.getName f) " — " (.getMessage e))))
+      (println (str "[tref] parse error: " (.getName f) " — " (.getMessage e)))
       [])))
 
 (defn tref!

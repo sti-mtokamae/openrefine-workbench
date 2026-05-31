@@ -31,3 +31,6 @@ tmp/
 
 # Trial experiments (local work, not for public repo)
 trials/experiments/
+
+# IDE: Calva (VS Code Clojure extension) workspace state
+.calva/
