@@ -51,7 +51,8 @@
 ;; コンパイルOKなファイルだけref投入
 (defmethod run-phase! :ingest/jref-gen-tests [trial phase-spec]
   (let [{:keys [java-root]} (:params phase-spec)
-        ok-files (core/compile-ok-java-files java-root)
+        ok-files (->> (core/compile-ok-java-files java-root)
+                      (remove nil?))
         n (if (seq ok-files)
             (core/jref! ok-files :trial (:trial/id trial) :tag "gen-tests")
             0)]
