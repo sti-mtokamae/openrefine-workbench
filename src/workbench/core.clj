@@ -2654,16 +2654,20 @@
                                           :gta/class-name cn
                                           :gta/rank r
                                           :gta/loc l
+                                          :gta/src-loc sl
+                                          :gta/loc-norm ln
                                           :gta/assertions a
                                           :gta/method-calls mc
                                           :gta/compiles? comp
                                           :gta/coverage c}]))]
     (->> results
-         (map (fn [{:keys [t cn r l a mc comp c]}]
+         (map (fn [{:keys [t cn r l sl ln a mc comp c]}]
                 {:gta/trial t
                  :gta/class-name cn
                  :gta/rank r
                  :gta/loc l
+                 :gta/src-loc sl
+                 :gta/loc-norm ln
                  :gta/assertions a
                  :gta/method-calls mc
                  :gta/compiles? comp

@@ -134,10 +134,19 @@
       (let [avg-loc (if (seq all-results)
                       (double (/ (reduce + 0 (map :gta/loc all-results)) (count all-results)))
                       0.0)
+            avg-src-loc (if (seq all-results)
+                          (double (/ (reduce + 0 (map #(or (:gta/src-loc %) 0) all-results))
+                                     (count all-results)))
+                          0.0)
+            avg-loc-norm (if (seq all-results)
+                           (double (/ (reduce + 0 (map #(or (:gta/loc-norm %) 0.0) all-results))
+                                      (count all-results)))
+                           0.0)
             avg-assertions (if (seq all-results)
                              (double (/ (reduce + 0 (map :gta/assertions all-results)) (count all-results)))
                              0.0)]
         (println (format "    平均 LOC: %.1f, 平均 Assertion: %.1f" avg-loc avg-assertions))
+        (println (format "    平均 Src LOC: %.1f, 平均 正規化 LOC: %.2f" avg-src-loc avg-loc-norm))
         (println (format "    コンパイル可能: %d / %d (%.1f%%)" compiles-count (count all-results) compiles-pct))))))
 
 (defmethod run-phase! :query/gen-tests-a-rank [trial _]
@@ -156,9 +165,13 @@
         results  (core/gen-tests :trial trial-id :rank rank)]
     (println (str "  " rank " ランク対象: " (count results) " テスト"))
     (doseq [r (sort-by :gta/class-name results)]
-      (println (format "    %-50s | LOC:%3d | Assert:%2d | Compiles:%s"
+      (println (format "    %-50s | LOC:%3d | Src:%4s | Norm:%7.2f | Assert:%2d | Compiles:%s"
                        (:gta/class-name r)
                        (:gta/loc r)
+                       (if-let [src-loc (:gta/src-loc r)]
+                         (str src-loc)
+                         "-")
+                       (double (or (:gta/loc-norm r) 0.0))
                        (:gta/assertions r)
                        (if (:gta/compiles? r) "✓" "✗"))))))
 
@@ -169,9 +182,13 @@
         results  (core/gen-tests :trial trial-id :rank rank)]
     (println (str "  " rank " ランク対象: " (count results) " テスト"))
     (doseq [r (sort-by :gta/class-name results)]
-      (println (format "    %-50s | LOC:%3d | Assert:%2d | Compiles:%s"
+      (println (format "    %-50s | LOC:%3d | Src:%4s | Norm:%7.2f | Assert:%2d | Compiles:%s"
                        (:gta/class-name r)
                        (:gta/loc r)
+                       (if-let [src-loc (:gta/src-loc r)]
+                         (str src-loc)
+                         "-")
+                       (double (or (:gta/loc-norm r) 0.0))
                        (:gta/assertions r)
                        (if (:gta/compiles? r) "✓" "✗"))))))
 

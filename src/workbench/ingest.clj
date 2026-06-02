@@ -231,6 +231,16 @@
   [source-code]
   (count (re-seq #"\.\s*[a-z_][a-zA-Z0-9]*\s*\(" source-code)))
 
+(defn- normalized-loc
+  "テスト LOC を対象クラス LOC で正規化した値を返す。
+   src-loc が小さい場合は raw LOC をそのまま返す。"
+  [loc src-loc]
+  (let [loc (double (or loc 0))
+        src-loc (double (or src-loc 0))]
+    (if (pos? src-loc)
+      (/ loc (Math/log1p src-loc))
+      loc)))
+
 
 ;;
 ;; can-compile? は「静的な括弧・コメント対応のみの超簡易構文チェック」関数です。
@@ -269,11 +279,14 @@
    trial: トライアル ID
    opts:
      :class-name - テスト対象のクラス名
+     :src-loc    - テスト対象クラスの LOC（任意。LOC 正規化に使用）
 
    返値：
      {:class-name \"ActivityRecord\",
       :rank :A,
       :loc 150,
+      :src-loc 487,
+      :loc-norm 24.0,
       :assertions 12,
       :method-calls 25,
       :compiles? true,
@@ -286,12 +299,13 @@
      C: LOC >= 20
      D: LOC < 20
   "
-  [node test-file-path trial & {:keys [class-name]}]
+  [node test-file-path trial & {:keys [class-name src-loc]}]
   (try
     (let [source (slurp test-file-path)
           loc (count-lines source)
           assertions (count-assertions source)
           method-calls (count-method-calls source)
+          loc-norm (normalized-loc loc src-loc)
           compiles? (can-compile? source)
           
           ;; ランク判定（品質スコアベース）
@@ -307,6 +321,8 @@
       {:class-name class-name
        :rank rank
        :loc loc
+        :src-loc src-loc
+        :loc-norm loc-norm
        :assertions assertions
        :method-calls method-calls
        :compiles? compiles?
@@ -322,6 +338,8 @@
        :rank :D
        :error (str e)
        :loc 0
+        :src-loc src-loc
+        :loc-norm 0.0
        :assertions 0
        :method-calls 0
        :compiles? false
@@ -330,6 +348,15 @@
        :undefined-methods []
        :defined-count 0
        :total-count 0})))
+
+(defn- infer-src-roots-from-gen-tests-dir
+  "src-roots が未指定のとき、gen-tests-dir から trial の repo ルートを推定する。"
+  [gen-tests-dir]
+  (let [repo-dir (str/replace gen-tests-dir #"/exports/gen-tests/?$" "/repo")
+        repo-file (io/file repo-dir)]
+    (if (.isDirectory repo-file)
+      [repo-dir]
+      [])))
 
 ;; gen-tests/ ディレクトリ配下のすべての Test.java ファイルを分析し、
 ;; XTDB :gen-tests テーブルに格納する（差分同期）。
@@ -343,7 +370,11 @@
 ;;   (analyze-gen-tests-dir! node :gen-tests-dir "trials/experiments/2026-04-28-tradehub/exports/gen-tests" :trial "tradehub" :src-roots ["src/main/java"])
 (defn analyze-gen-tests-dir!
   [node & {:keys [gen-tests-dir trial src-roots]}]
-  (let [;; gen-tests-dir 直下のサブディレクトリ（クラス名）を列挙
+  (let [effective-src-roots (if (seq src-roots)
+                              src-roots
+                              (infer-src-roots-from-gen-tests-dir gen-tests-dir))
+        _ (println (str "  [debug] effective-src-roots: " effective-src-roots))
+        ;; gen-tests-dir 直下のサブディレクトリ（クラス名）を列挙
         gen-tests-path (io/file gen-tests-dir)
         class-dirs (when (.isDirectory gen-tests-path)
                      (->> (.listFiles gen-tests-path)
@@ -354,36 +385,44 @@
         ;; 各クラスディレクトリの Test.java を分析
         ;; helper: find production source java file for given class name
         find-src-file (fn [class-name]
-                        (when (seq src-roots)
-                          (some (fn [root]
-                                  (let [files (file-seq (io/file root))]
-                                    (some (fn [^java.io.File f]
-                                            (when (and (.isFile f)
-                                                       (= (.getName f) (str class-name ".java")))
-                                              (.getAbsolutePath f)))
-                                          files))) src-roots)))
+                        (when (seq effective-src-roots)
+                          (let [target-name (str class-name ".java")]
+                            (first
+                              (for [root effective-src-roots
+                                    ^java.io.File f (file-seq (io/file root))
+                                    :when (and (.isFile f) (= (.getName f) target-name))]
+                                (.getAbsolutePath f))))))
 
         docs (mapv (fn [class-dir]
                     (let [test-java-path (str gen-tests-dir "/" class-dir "/" class-dir "Test.java")
                           test-file (io/file test-java-path)]
                       (if (.exists test-file)
-                        (let [analysis (analyze-gen-test node test-java-path trial :class-name class-dir)
-                              src-file (find-src-file class-dir)
+                        (let [src-file (find-src-file class-dir)
+                              _ (when (= class-dir "ActivityRecordServiceImpl")
+                                  (println (str "    [debug] ActivityRecordServiceImpl src-file: " src-file)))
                               src-loc (when src-file
                                         (try
                                           (let [s (slurp src-file)]
                                             (count-lines s))
                                           (catch Exception _ 0)))
+                              _ (when (= class-dir "ActivityRecordServiceImpl")
+                                  (println (str "    [debug] ActivityRecordServiceImpl src-loc: " src-loc)))
+                              analysis (analyze-gen-test node test-java-path trial
+                                                         :class-name class-dir
+                                                         :src-loc src-loc)
+                              _ (when (= class-dir "ActivityRecordServiceImpl")
+                                  (println (str "    [debug] analysis result: " analysis)))
                               doc {:xt/id (str trial "::" class-dir)
                                    :gta/trial trial
                                    :gta/class-name class-dir
                                    :gta/rank (:rank analysis)
                                    :gta/loc (:loc analysis)
+                                   :gta/src-loc src-loc
+                                   :gta/loc-norm (:loc-norm analysis)
                                    :gta/assertions (:assertions analysis)
                                    :gta/method-calls (:method-calls analysis)
                                    :gta/compiles? (:compiles? analysis)
                                    :gta/coverage (:coverage analysis)
-                                   :gta/src-loc src-loc
                                    :gta/analyzed-at (java.time.Instant/now)}]
                           doc)
                         ;; Test.java が見つからない場合はスキップ
