@@ -15,7 +15,7 @@ fi
 TRIAL_FILE="$1"
 
 if grep -q ':xtdb-workbench' "$TRIAL_FILE"; then
-  exec guix shell -m manifest.scm -- clojure -A:xtdb -M -m workbench.runner "$@"
+  exec guix shell -m manifest.scm -- clojure -M:xtdb -m workbench.runner "$@"
 else
   exec guix shell -m manifest.scm -- clojure -M -m openrefine-runner "$@"
 fi

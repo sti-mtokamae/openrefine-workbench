@@ -62,6 +62,11 @@
             0)]
     (println (str "  gen-test refs (compile OK only): " n))))
 
+;; Clojure 呼び出しグラフ解析
+(defmethod run-phase! :ingest/xref [trial _]
+  (let [n (core/xref! (:input/clj-roots trial) :trial (:trial/id trial))]
+    (println (str "  xref: " n))))
+
 ;; -------------------------
 ;; analyze フェーズ
 ;; -------------------------
@@ -81,6 +86,27 @@
       (println (str "  total classes: " (count sorted)))
       (doseq [[i c] (map-indexed vector (take 40 sorted))]
         (println (format "  %3d  %s" (inc i) c))))))
+
+(defmethod run-phase! :analyze/xref-overview [trial phase-spec]
+  (let [trial-id (:trial/id trial)
+        top-n    (get-in phase-spec [:params :top-n] 20)
+        rs       (->> (core/q '(from :refs [{:ref/from from :ref/to to :ref/trial trial}]))
+                      (filter #(= (:ref/trial %) trial-id))
+                      (remove #(re-find #"^(clojure\.|java\.|xtdb\.)" (:to %)))
+                      (remove #(re-find #"/<top-level>$" (:from %))))]
+    (when (seq rs)
+      (println (str "\n--- Clojure xref fan-in top " top-n " ---"))
+      (doseq [[sym count] (take top-n (->> rs
+                                            (group-by :ref/to)
+                                            (map (fn [[k v]] [k (count v)]))
+                                            (sort-by second >)))]
+        (println (format "  %3d  %s" count sym)))
+      (println (str "\n--- Clojure xref fan-out top " top-n " ---"))
+      (doseq [[sym count] (take top-n (->> rs
+                                            (group-by :ref/from)
+                                            (map (fn [[k v]] [k (count v)]))
+                                            (sort-by second >)))]
+        (println (format "  %3d  %s" count sym))))))
 
 (defmethod run-phase! :analyze/uncovered-sql [trial _]
   (let [trial-id   (:trial/id trial)

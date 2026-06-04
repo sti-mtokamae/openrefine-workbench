@@ -1,12 +1,17 @@
 {:trial/id   "self-analysis"
- :trial/tool :xtdb
+ :trial/tool :xtdb-workbench
  :trial/tags [:clojure :xref :self-referential]
 
  ;; このワークベンチ自身のソースを解析対象にする
- ;; REPL（実行中のワークベンチ）が自分自身のコードを読み込む
- :input/dirs ["../../src"]
+ ;; Clojure 呼び出しグラフ解析のみ（Java分析は不要）
+ :input/clj-roots ["../../src"]
 
- :goal "workbench 自身の呼び出しグラフを可視化する"
+ :goal "workbench 自身の呼び出しグラフを可視化し、基盤層を検証する"
 
  :notes/file "notes.md"
- :output/dir "exports"}
+ :output/dir "exports"
+
+ :phases
+ [{:phase :ingest/xref}
+  {:phase :analyze/xref-overview
+   :params {:top-n 20}}]}
