@@ -84,14 +84,23 @@
   [root]
   (ingest/compile-errors-dir! (node) root))
 
+(defn- compile-error-doc-errors [doc]
+  (or (:java/compile-errors doc)
+      (:errors doc)
+      []))
+
+(defn- compile-error-doc-file [doc]
+  (or (:file/path doc)
+      (:file doc)))
+
 ;; compile-ok-java-files: compile-errors-dir! でエラーが空のファイルのみ返す
 (defn compile-ok-java-files
   "指定ディレクトリ以下の全Javaファイルのうち、コンパイルエラーがないファイルパスのベクタを返す。"
   [root]
-  (let [errs (ingest/compile-errors-dir! (node) root)]
+  (let [errs (compile-errors-dir! root)]
     (->> errs
-         (filter #(empty? (:errors %)))
-         (mapv :file))))
+         (filter #(empty? (compile-error-doc-errors %)))
+         (mapv compile-error-doc-file))))
 
 ;; -------------------------
 ;; ingest
