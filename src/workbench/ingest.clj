@@ -239,15 +239,14 @@
 
 
 ;;
-;; can-compile? は「静的な括弧・コメント対応のみの超簡易構文チェック」関数です。
+;; syntactically-closed? は、AI生成コードの途中切れやコメント未閉鎖を
+;; ざっくり弾くための超簡易チェックです。
 ;; - 実際のjavacやmvn test-compileの結果とは異なり、
 ;;   本当の意味での「コンパイル可能性」を保証しません。
-;; - DiagnosticCollector等による本格的なエラー検出実装後は、
-;;   そちらに置き換えるか、fallback用途に限定することを推奨します。
-(defn- can-compile?
-  "【簡易構文チェック】Java ファイルが javac でコンパイル可能かを超簡易的に判定。
-   ※実際のjavac実行はせず、括弧やコメントの対応のみをチェック。
-   本格的なエラー検出にはDiagnosticCollector等の利用を推奨。"
+;; - compile 可否の正式判定には DiagnosticCollector ベースの実装を使います。
+(defn- syntactically-closed?
+  "【簡易構文チェック】Javaソースが途中切れしていないかを超簡易的に判定する。
+   ※実際のjavac実行はせず、括弧やコメントの対応のみをチェックする。"
   [source-code]
   (try
     ;; 基本的な Java 構文チェック
@@ -265,6 +264,27 @@
       (and comment-ok? brace-ok? paren-ok?))
     (catch Exception _
       false)))
+
+(defn- compile-errors-for-file
+  "XTDB :java-compile-errors から、対象ファイルの compile errors doc を取得する。
+   compile-errors-to-xtdb! は絶対パスを :xt/id / :file/path に使うため、ここでも絶対パスで照合する。"
+  [node test-file-path]
+  (let [abs-path (.getAbsolutePath (io/file test-file-path))]
+    (->> (xt/q node '(from :java-compile-errors
+                      [{:xt/id id
+                        :file/path fpath
+                        :java/compile-errors errs
+                        :java/compile-error? err?}]))
+         (filter #(= abs-path (:fpath %)))
+         first)))
+
+(defn- compile-errors-for-gen-test
+  "生成テストの compile errors を返す。
+   XTDB に compile errors doc があればそれを優先し、無ければ javac でその場診断する。"
+  [node test-file-path]
+  (if-let [compile-errors-doc (compile-errors-for-file node test-file-path)]
+    (or (:errs compile-errors-doc) [])
+    (javac/compile-with-diagnostics test-file-path)))
 
 (defn analyze-gen-test
   "生成されたテストファイル（Test.java）を品質スコアに基づいてランク分けする（A/B/C/D）。
@@ -298,7 +318,8 @@
           loc (count-lines source)
           assertions (count-assertions source)
           method-calls (count-method-calls source)
-          compiles? (can-compile? source)
+          compile-errors (compile-errors-for-gen-test node test-file-path)
+          compiles? (empty? compile-errors)
           
           ;; ランク判定（品質スコアベース）
           ;; コンパイル不可 → 自動 D ランク
