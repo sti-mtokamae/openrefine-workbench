@@ -48,14 +48,14 @@
 
 ;; AI生成テストのjavacチェック（compile-errors-dir!）
 (defmethod run-phase! :ingest/compile-errors-gen-tests [trial phase-spec]
-  (let [{:keys [java-root]} (:params phase-spec)
-        n (core/compile-errors-dir! java-root)]
+  (let [{:keys [java-root classpath]} (:params phase-spec)
+        n (core/compile-errors-dir! java-root :classpath classpath)]
     (println (str "  compile errors checked: " (count n) " files"))))
 
 ;; コンパイルOKなファイルだけref投入
 (defmethod run-phase! :ingest/jref-gen-tests [trial phase-spec]
-  (let [{:keys [java-root]} (:params phase-spec)
-        ok-files (->> (core/compile-ok-java-files java-root)
+  (let [{:keys [java-root classpath]} (:params phase-spec)
+        ok-files (->> (core/compile-ok-java-files java-root :classpath classpath)
                       (remove nil?))
         n (if (seq ok-files)
             (core/jref! ok-files :trial (:trial/id trial) :tag "gen-tests")
