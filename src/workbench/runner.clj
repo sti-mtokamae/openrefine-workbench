@@ -294,6 +294,102 @@
     (when-let [recheck (get-in result [:recheck])]
       (println (str "  Recheck: " (:error-count recheck) " errors, compile-ok=" (:compile-ok? recheck))))))
 
+;; -------------------------
+;; Phase 3: Runner Flexibility
+;; -------------------------
+
+;; 複数ファイル・複数バケット一括処理
+(defmethod run-phase! :testfix/fix-bucket-batch [trial phase-spec]
+  (let [{:keys [java-paths class-name src-root bucket-indices classpath]} (:params phase-spec)
+        trial-id (:trial/id trial)
+        cp (or classpath (resolve-classpath (:params phase-spec)))
+        files-list (if (coll? java-paths) java-paths [java-paths])
+        buckets-list (if (coll? bucket-indices) bucket-indices [0])
+        total (count files-list)
+        results []]
+    (println (str "  Processing " total " file(s) with " (count buckets-list) " bucket(s)"))
+    (doseq [[file-idx java-path] (map-indexed vector files-list)]
+      (println (str "\n  [File " (inc file-idx) "/" total "] " (java.io.File. java-path)))
+      (doseq [bucket-idx buckets-list]
+        (println (str "    Bucket " bucket-idx "..."))
+        (try
+          (let [result (core/fix-bucket! java-path
+                                         :trial trial-id
+                                         :class-name class-name
+                                         :src-root src-root
+                                         :bucket-index bucket-idx
+                                         :classpath cp)]
+            (when-let [error-count (get-in result [:recheck :error-count])]
+              (let [status (if (zero? error-count) "✓ FIXED" (str "✗ " error-count " errors"))]
+                (println (str "      " status)))))
+          (catch Exception ex
+            (println (str "      ✗ ERROR: " (ex-message ex)))))))))
+
+;; 非線形実行: modify → check → modify サイクル
+;; max-retries までエラーが減らなくなるまで繰り返す
+(defmethod run-phase! :testfix/fix-bucket-cycle [trial phase-spec]
+  (let [{:keys [java-path class-name src-root bucket-index classpath max-retries]} (:params phase-spec)
+        trial-id (:trial/id trial)
+        cp (or classpath (resolve-classpath (:params phase-spec)))
+        max-attempts (or max-retries 3)]
+    (println (str "  Cycle mode: up to " max-attempts " retry attempts"))
+    (loop [attempt 1
+           prev-error-count nil]
+      (when (<= attempt max-attempts)
+        (println (str "    Attempt " attempt "/" max-attempts "..."))
+        (try
+          (let [result (core/fix-bucket! java-path
+                                         :trial trial-id
+                                         :class-name class-name
+                                         :src-root src-root
+                                         :bucket-index bucket-index
+                                         :classpath cp)
+                error-count (get-in result [:recheck :error-count])]
+            (println (str "      Result: " error-count " errors remaining"))
+            
+            ;; 終了条件の判定
+            (cond
+              (zero? error-count)
+              (println "      ✓ All errors fixed!")
+              
+              (and prev-error-count (>= error-count prev-error-count))
+              (println "      ✗ No progress, stopping cycle")
+              
+              :else
+              (recur (inc attempt) error-count)))
+          
+          (catch Exception ex
+            (println (str "      ✗ ERROR: " (ex-message ex)))
+            (when (< attempt max-attempts)
+              (recur (inc attempt) prev-error-count))))))))
+
+;; クラス単位の選別修正: 複数クラスを指定して該当ファイルだけ修正
+(defmethod run-phase! :testfix/fix-selected-classes [trial phase-spec]
+  (let [{:keys [java-root class-names src-root classpath]} (:params phase-spec)
+        trial-id (:trial/id trial)
+        cp (or classpath (resolve-classpath (:params phase-spec)))
+        classes-to-fix (if (coll? class-names) class-names [class-names])]
+    (println (str "  Filtering for " (count classes-to-fix) " class(es)"))
+    
+    (doseq [class-name classes-to-fix]
+      (let [test-filename (str class-name "Test.java")
+            java-path (str java-root "/" test-filename)]
+        (if (.exists (java.io.File. java-path))
+          (do
+            (println (str "    [" class-name "]..."))
+            (try
+              (let [result (core/fix-bucket! java-path
+                                             :trial trial-id
+                                             :class-name class-name
+                                             :src-root src-root
+                                             :bucket-index 0
+                                             :classpath cp)
+                    error-count (get-in result [:recheck :error-count])]
+                (println (str "      " (if (zero? error-count) "✓" "✗") " " error-count " errors")))
+              (catch Exception ex
+                (println (str "      ✗ ERROR: " (ex-message ex))))))
+          (println (str "    [" class-name "] NOT FOUND: " java-path)))))))
+
 (defmethod run-phase! :default [_ phase-spec]
   (throw (ex-info (str "Unknown phase: " (:phase phase-spec))
                   {:phase-spec phase-spec})))

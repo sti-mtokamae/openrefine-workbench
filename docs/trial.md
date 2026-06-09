@@ -296,3 +296,96 @@ class / method scope extraction
 cd trials/repo
 git clone https://github.com/your-org/your-java-project.git .
 ```
+
+---
+
+## Phase 3: Runner Flexibility — 複数ファイル・非線形実行
+
+### `:testfix/fix-bucket-batch` — 複数ファイル・複数バケット一括処理
+
+複数のテストファイルと複数のエラーバケットを一度に修正する。
+
+```edn
+{:phase :testfix/fix-bucket-batch
+ :params {:java-paths ["exports/gen-tests/ClassA/ClassATest.java"
+                       "exports/gen-tests/ClassB/ClassBTest.java"]
+          :class-name "SomeClass"
+          :src-root "repo/src/main/java"
+          :bucket-indices [0 1 2]
+          :classpath-file "/tmp/classpath.txt"}}
+```
+
+**実行フロー**: 各ファイルに対して全バケットを修正。進捗をファイル × バケットで表示。
+
+### `:testfix/fix-bucket-cycle` — 非線形実行（modify → check → modify）
+
+同じファイル・バケットで修正を繰り返す。エラー数が減少している間は継続。
+
+```edn
+{:phase :testfix/fix-bucket-cycle
+ :params {:java-path "exports/gen-tests/ClassA/ClassATest.java"
+          :class-name "ClassA"
+          :src-root "repo/src/main/java"
+          :bucket-index 0
+          :max-retries 3
+          :classpath-file "/tmp/classpath.txt"}}
+```
+
+**実行フロー**:
+1. AI でバケットを修正 → コンパイル検証
+2. エラー数が前回より減っていれば試行継続
+3. エラー 0 に到達するか、エラー数が停滞したら終了
+4. 最大 `max-retries` 回まで
+
+### `:testfix/fix-selected-classes` — クラス単位の選別修正
+
+複数クラスを指定して、対応するテストファイルだけを修正。
+
+```edn
+{:phase :testfix/fix-selected-classes
+ :params {:java-root "exports/gen-tests"
+          :class-names ["DocumentAggregateServiceImpl"
+                        "GenericMasterCsvServiceImpl"]
+          :src-root "repo/src/main/java"
+          :classpath-file "/tmp/classpath.txt"}}
+```
+
+**実行フロー**: 各クラスに対して `<ClassName>Test.java` を探索して修正。見つからないファイルはスキップ。
+
+---
+
+## Phase 3 設定例（複合パイプライン）
+
+```edn
+{:trial/id "2026-04-28-tradehub-phase3"
+ :trial/tool :xtdb-workbench
+ 
+ :maven/classpath-config {...}
+ 
+ :phases [
+  ;; Phase 1-2: データ投入 + テスト生成
+  {:phase :ingest/jref ...}
+  {:phase :ingest/jacoco ...}
+  {:phase :generate/tests ...}
+  
+  ;; Phase 3: Runner Flexibility
+  ;; パターン 1: 複数ファイルの一括処理
+  {:phase :testfix/fix-bucket-batch
+   :params {:java-paths [".../ClassA/ClassATest.java"
+                         ".../ClassB/ClassBTest.java"]
+            :bucket-indices [0 1]}}
+  
+  ;; パターン 2: サイクル修正（エラーが減るまで繰り返し）
+  {:phase :testfix/fix-bucket-cycle
+   :params {:max-retries 3}}
+  
+  ;; パターン 3: クラス選別修正
+  {:phase :testfix/fix-selected-classes
+   :params {:class-names ["ClassA" "ClassB" "ClassC"]}}
+ ]}
+```
+
+**利用シーン**:
+- `fix-bucket-batch`: 同じエラーグループの複数ファイルを一度に処理
+- `fix-bucket-cycle`: 単一ファイルで複数回の修正試行（難しいエラーパターン対応）
+- `fix-selected-classes`: 特定のサービスクラスだけに集中（優先度付け）
