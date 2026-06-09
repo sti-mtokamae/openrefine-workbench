@@ -1,6 +1,7 @@
 # OpenRefine Workbench
 
 > Human REPL と AI Agent が同じ操作面を共有する、汎用データ/コード解析ワークベンチ。
+> JavaParser + XTDB v2 による Java コードベース静的解析と、GitHub Models API を使った **AI テスト増幅**。
 
 ---
 
@@ -14,6 +15,23 @@
 | **永続層** | XTDB v2 | ingest → query → visualize のループを Clojure REPL / AI Agent で操作 |
 
 どちらの層も `trial.edn` をセッション記述子として共有し、再現可能な分析を目指します。
+
+### 主要な分析能力
+
+- **Java コード解析** (`jref!` / `jsig!` / `sqlref!`)
+  - 呼び出しグラフ（call graph）を AST から抽出
+  - メソッドシグネチャ（型・修飾子）を解析
+  - MyBatis SQL アノテーション（`@Select` / `@Param` など）を抽出
+
+- **JaCoCo カバレッジ統合** (`jacoco!`)
+  - ビルド結果の `jacoco.xml` を XTDB に同期（差分更新・冪等）
+  - 「未テスト」メソッドを自動特定
+  - カバレッジ増幅の効果を定量化
+
+- **AI テスト生成・修正** (`gen-tests-uncovered` / `fix-bucket!`)
+  - 未カバーかつ SQL 縛り付きメソッドのテストスケルトン生成（GitHub Models API）
+  - 生成テストのコンパイルエラーを自動修正（AI 修正 + javac 検証）
+  - runner フェーズ化で modify → check → modify サイクルの自動化
 
 ---
 
@@ -39,6 +57,109 @@ ingest → query → visualize
 (core/q '(from :refs [*]))             ; 任意クエリ
 (core/stop!)
 ```
+
+---
+
+## AI テスト増幅ワークフロー
+
+テストなし or 低カバレッジのメソッドに対し、**AI 生成スケルトン → 修正 → カバレッジ再計測** のサイクルを自動化します。
+
+### ワークフロー概要
+
+```
+1. データ投入（jref! + jacoco! + sqlref!）
+   ↓
+2. 未カバー × SQL 縛り候補を特定（uncovered-sql-methods）
+   ↓
+3. スケルトン一括生成（gen-tests-uncovered）→ exports/gen-tests/*.md
+   ↓
+4. md を統合して Test.java に（merge-all-test-mds）
+   ↓
+5. コンパイルエラー検出・修正（:testfix/fix-bucket フェーズ）
+   ├─ AI で型不一致・存在しないメソッド等を修正
+   └─ javac で再検証
+   ↓
+6. mvn test → jacoco.xml 生成
+   ↓
+7. jacoco! で差分更新 → 繰り返し（カバレッジ増幅）
+```
+
+### REPL 例
+
+```clojure
+;; 1. データ投入（trial スコープ付き）
+(core/jref! ["trials/experiments/tradehub/repo"] :trial "tradehub")
+(core/sqlref! ["trials/experiments/tradehub/repo"] :trial "tradehub")
+(core/jsig! ["trials/experiments/tradehub/repo"] :trial "tradehub")
+(core/jacoco! "path/to/jacoco.xml" :trial "tradehub")
+
+;; 2. 候補確認
+(core/uncovered-sql-methods :trial "tradehub")
+;; => [{:class "DocumentAggregateServiceImpl" :method "resolveProcessId" ...} ...]
+
+;; 3. スケルトン生成
+(core/gen-tests-uncovered :trial "tradehub"
+                          :out-dir "trials/experiments/tradehub/exports/gen-tests")
+
+;; 4. Test.java に統合
+(core/merge-all-test-mds :trial "tradehub"
+                         :gen-dir "trials/experiments/tradehub/exports/gen-tests"
+                         :dest-dir "trials/experiments/tradehub/repo/.../src/test/java")
+
+;; 5. テスト修正フェーズ（runner で自動実行、またはREPLから手動実行）
+(core/fix-bucket!
+  "path/to/DocumentAggregateServiceImplTest.java"
+  :trial "tradehub"
+  :class-name "DocumentAggregateServiceImpl"
+  :src-root "trials/experiments/tradehub/repo/.../src/main/java"
+  :bucket-index 0
+  :classpath-file "/tmp/tradehub-gen-tests.classpath")
+```
+
+**詳細は [docs/test-amplification.md](docs/test-amplification.md) を参照。**
+
+---
+
+## Trial ワークフロー & Runner フェーズ
+
+`trial.edn` は複数の分析ステップを **フェーズ** として管理できます。  
+各フェーズは XTDB に記録され、再実行時に自動スキップされます。
+
+### trial.edn 構成例
+
+```edn
+{:trial/id "2026-04-28-tradehub"
+ :trial/tool :xtdb-workbench
+ 
+ ;; Maven classpath 自動生成（testfix フェーズが使用）
+ :maven/classpath-config
+ {:repo-root "trials/experiments/2026-04-28-tradehub/repo"
+  :module "common-lib"
+  :scope "test"
+  :output-file "/tmp/tradehub-common-lib-gen-tests.classpath"}
+
+ ;; フェーズパイプライン
+ :phases [
+  {:phase :ingest/jref :params {:paths ["repo"]}}
+  {:phase :ingest/jacoco :params {:module-dir "repo/common-lib"}}
+  {:phase :ingest/sqlref :params {:paths ["repo"]}}
+  
+  {:phase :generate/tests :params {:trial "tradehub"}}
+  {:phase :generate/merge-tests :params {...}}
+  
+  ;; ✨ テスト修正フェーズ（Phase 1-2 の成果）
+  {:phase :testfix/fix-bucket
+   :params {:java-path "exports/gen-tests/DocumentAggregateServiceImpl/Test.java"
+            :class-name "DocumentAggregateServiceImpl"
+            :src-root "repo/common-lib/src/main/java"
+            :bucket-index 0
+            :classpath-file "/tmp/tradehub-common-lib-gen-tests.classpath"}}
+ ]}
+```
+
+**bin/run-trial** でフェーズパイプラインを自動実行。PC リブート後も同じ configuration で継続可能。
+
+**詳細は [docs/trial.md](docs/trial.md) を参照。**
 
 ---
 
@@ -109,10 +230,28 @@ guix shell -m manifest.scm -- clojure -A:xtdb:repl
 ;; AI テスト生成（GitHub Models API 使用）
 (core/jsig! ["trials/experiments/xxx/repo"] :trial "my-project")
 (core/jacoco! "/path/to/jacoco.xml" :trial "my-project")
-(core/uncovered-sql-methods :trial "my-project")  ; dry-run: 候補一覧
-(core/gen-test "FooServiceImpl" :trial "my-project" :method "doSomething")
-(core/gen-tests-uncovered :trial "my-project"      ; 全件生成
-                          :out-dir "/tmp/gen-tests")
+(core/sqlref! ["trials/experiments/xxx/repo"] :trial "my-project")
+
+;; 生成対象を確認
+(core/uncovered-sql-methods :trial "my-project")
+;; => [{:class "FooServiceImpl" :method "doSomething" :sql-deps [...]} ...]
+
+;; スケルトン生成・統合
+(core/gen-tests-uncovered :trial "my-project" 
+                          :out-dir "trials/experiments/xxx/exports/gen-tests")
+(core/merge-all-test-mds :trial "my-project" 
+                         :gen-dir "trials/experiments/xxx/exports/gen-tests"
+                         :dest-dir "trials/experiments/xxx/repo/.../src/test/java")
+
+;; テスト修正（AI で compile errors を自動修正）
+(core/fix-bucket!
+  "path/to/FooServiceImplTest.java"
+  :trial "my-project"
+  :class-name "FooServiceImpl"
+  :src-root "trials/experiments/xxx/repo/.../src/main/java"
+  :bucket-index 0
+  :classpath-file "/tmp/my-classpath.classpath")
+
 (core/stop!)
 ```
 
@@ -138,7 +277,7 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 # trial を初期化
 ./bin/init-trial --trial-id "my-analysis" --pattern "*.java"
 
-# trial を実行
+# trial を実行（runner フェーズ自動実行・classpath 自動生成含む）
 ./bin/run-trial trials/experiments/my-analysis/trial.edn
 
 # サンプルを実行
@@ -168,11 +307,11 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 
 | ドキュメント | 内容 |
 |---|---|
-| [docs/analysis.md](docs/analysis.md) | Java/Clojure 解析 end-to-end・クエリ例・限界 |
-| [docs/api.md](docs/api.md) | workbench.core API・テーブルスキーマ・XTDB 落とし穴 |
-| [docs/test-amplification.md](docs/test-amplification.md) | テスト増幅ワークフローガイド（生成→統合→修正→カバレッジ増幅サイクル） |
-| [docs/trial.md](docs/trial.md) | Trial ワークフロー・trial.edn・seed-history・init-trial |
-| [docs/setup.md](docs/setup.md) | 事前要件・orcli・OpenRefine Windows 起動・WSL 接続 |
+| [docs/test-amplification.md](docs/test-amplification.md) | **テスト増幅ワークフロー完全ガイド** — テストスケルトン生成 → 統合 → AI 修正 → カバレッジ計測の全工程。修正フェーズ（`:testfix/fix-bucket`）の trial.edn 統合例も含む |
+| [docs/trial.md](docs/trial.md) | Trial ワークフロー・trial.edn スキーマ・runner フェーズ機構・`:maven/classpath-config` による自動化 |
+| [docs/api.md](docs/api.md) | workbench.core API リファレンス・テーブルスキーマ・`fix-bucket!` の使用方法（REPL / runner 両対応）・XTDB の落とし穴 |
+| [docs/analysis.md](docs/analysis.md) | Java/Clojure 解析 end-to-end・複雑なクエリ例・静的解析の限界 |
+| [docs/setup.md](docs/setup.md) | 環境セットアップ詳細・orcli・OpenRefine Windows 起動・WSL 接続 |
 
 ---
 
@@ -210,6 +349,55 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | `merge-all-test-mds` — per-method md を統合して Test.java を生成 | ✅ |
 | `fix-bucket!` — テスト修正フェーズ（AI 修正 + コンパイル検証）— runner `:testfix/fix-bucket` フェーズとして実行可能 | ✅ |
 | `bin/setup-classpath` — Maven classpath 自動生成（trial.edn `:maven/classpath-config` から） | ✅ |
+
+---
+
+## Phase 1-2 の成果：AI テスト修正の runner 統合
+
+**Phase 1（refactor）**: `fix-bucket!` を workbench.core に統合、`:testfix/fix-bucket` フェーズとして runner で実行可能に。  
+**Phase 2（testing）**: 実装検証完了。DocumentAggregateServiceImplTest が D-rank（3 コンパイルエラー）から B-rank（エラー 0）に昇格。
+
+### 新しい機能
+
+| 機能 | 説明 | 導入 | Commit |
+|---|---|---|---|
+| **fix-bucket! 関数** | クラス単位・バケット単位でコンパイルエラーを修正（AI + javac 検証） | Phase 1 | 63d4ed7 |
+| **:testfix/fix-bucket フェーズ** | runner パイプラインに統合可能。trial.edn で宣言的に指定 | Phase 1 | 63d4ed7 |
+| **setup-classpath** | trial.edn の `:maven/classpath-config` から Maven classpath を自動生成 | Phase 2 | 13273ae |
+| **:maven/classpath-config** | trial.edn で classpath 生成ルールを宣言。PC リブート後も自動再生成 | Phase 2 | 13273ae |
+
+### 使用例（trial.edn）
+
+```edn
+{:trial/id "2026-04-28-tradehub"
+ 
+ :maven/classpath-config
+ {:repo-root "trials/experiments/2026-04-28-tradehub/repo"
+  :module "common-lib"
+  :scope "test"
+  :output-file "/tmp/tradehub-common-lib-gen-tests.classpath"}
+ 
+ :phases [
+  ;; ... 前のフェーズ ...
+  
+  {:phase :testfix/fix-bucket
+   :params {:java-path "exports/gen-tests/DocumentAggregateServiceImpl/DocumentAggregateServiceImplTest.java"
+            :class-name "DocumentAggregateServiceImpl"
+            :src-root "repo/common-lib/src/main/java"
+            :bucket-index 0
+            :classpath-file "/tmp/tradehub-common-lib-gen-tests.classpath"}}
+ ]}
+```
+
+`bin/run-trial` 実行時：
+1. `setup-classpath` が自動実行 → `/tmp/tradehub-common-lib-gen-tests.classpath` 生成
+2. 各フェーズが順序実行
+3. `:testfix/fix-bucket` 到達時に AI でコンパイルエラー修正
+4. XTDB が修正済みフェーズを記録 → 再実行時にスキップ
+
+**詳細は [docs/test-amplification.md](docs/test-amplification.md#テスト修正フェーズtestfixfix-bucket) の「テスト修正フェーズ」セクションを参照。**
+
+---
 
 ### OpenRefine trial ワークフロー
 
