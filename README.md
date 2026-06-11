@@ -189,6 +189,7 @@ ingest → query → visualize
 ├── docs/
 │   ├── analysis.md            # Java/Clojure 解析 end-to-end・クエリ例
 │   ├── api.md                 # workbench.core API・スキーマ詳細
+│   ├── openrefine-xtdb-slicing-direction.md # OpenRefine × XTDB スライシング方向性メモ
 │   ├── test-amplification.md  # テスト増幅ワークフローガイド（生成・統合・修正・カバレッジ計測）
 │   ├── trial.md               # Trial ワークフロー詳細
 │   └── setup.md               # 環境セットアップ詳細
@@ -311,6 +312,7 @@ guix shell -m manifest.scm -- clojure -A:xtdb -M test/smoke_test.clj trials/samp
 | [docs/trial.md](docs/trial.md) | Trial ワークフロー・trial.edn スキーマ・runner フェーズ機構・`:maven/classpath-config` による自動化 |
 | [docs/api.md](docs/api.md) | workbench.core API リファレンス・テーブルスキーマ・`fix-bucket!` の使用方法（REPL / runner 両対応）・XTDB の落とし穴 |
 | [docs/analysis.md](docs/analysis.md) | Java/Clojure 解析 end-to-end・複雑なクエリ例・静的解析の限界 |
+| [docs/openrefine-xtdb-slicing-direction.md](docs/openrefine-xtdb-slicing-direction.md) | OpenRefine にソースと XTDB の分析結果をどう持ち込み、スライシングや変更影響分析へつなぐかの方向性メモ |
 | [docs/setup.md](docs/setup.md) | 環境セットアップ詳細・orcli・OpenRefine Windows 起動・WSL 接続 |
 
 ---
