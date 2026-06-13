@@ -16,7 +16,39 @@
 
 どちらの層も `trial.edn` をセッション記述子として共有し、再現可能な分析を目指します。
 
-OpenRefine と XTDB のスライシング方針については [docs/openrefine-xtdb-slicing-direction.md](docs/openrefine-xtdb-slicing-direction.md) を参照してください — 本ワークベンチの操作イメージを示しています。
+```mermaid
+flowchart LR
+  user[User] --> ui
+  ai[AI Agent] --> ui
+
+  subgraph explore[Exploration Layer]
+    direction TB
+    ui[OpenRefine / REPL Workspace]
+  end
+
+  subgraph orchestration[Declarative Workflow]
+    direction TB
+    trial[trial.edn]
+    runner[runner]
+    trial --> runner
+  end
+
+  subgraph compute[Persistence / Compute Layer]
+    direction TB
+    repos[Target Repositories / Source Trees]
+    analyzers[Clojure Analyzers]
+    xtdb[XTDB / Analysis Artifacts]
+    repos --> analyzers --> xtdb
+  end
+
+  ui <--> trial
+  runner --> analyzers
+  xtdb --> ui
+```
+
+このワークベンチでは、`trial.edn` を起点に、対象リポジトリの解析結果を XTDB に蓄積し、OpenRefine と AI Agent を通じて探索と再試行を反復します。
+
+OpenRefine と XTDB を使ったスライシングの具体的な進め方や役割分担については [docs/openrefine-xtdb-slicing-direction.md](docs/openrefine-xtdb-slicing-direction.md) を参照してください。上の全体図を、スライシング用途に寄せて具体化した補助ドキュメントです。
 
 ### 主要な分析能力
 
