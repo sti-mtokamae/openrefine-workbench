@@ -18,4 +18,12 @@
   {:phase :analyze/slice-call-flow
    :params {:root "FooController/foo"
             :depth 3
-            :output-file "foo-call-flow.tsv"}}]}
+            :output-file "foo-call-flow.tsv"}}
+  {:phase :analyze/export-method-spans
+   :params {:root "FooController/foo"
+            :depth 3
+            :output-file "foo-method-spans.tsv"}}
+  {:phase :analyze/export-source-lines
+   :params {:root "FooController/foo"
+            :depth 3
+            :output-file "foo-source-lines-enriched.tsv"}}]}

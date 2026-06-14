@@ -1,0 +1,19 @@
+{:trial/id "call-flow-openrefine"
+ :trial/tool :openrefine
+ :trial/tags [:openrefine :tsv :call-flow :slicing]
+
+ :input/files
+ ["../call-flow-slice/exports/foo-call-flow.tsv"]
+
+ :goal
+ "slice-call-flow が出力した TSV を OpenRefine に取り込み、
+  depth / parent-method / method-file / call-file を軸に探索する。"
+
+ :notes/file "notes.md"
+ :output/dir "exports"
+
+ :openrefine/url "http://172.27.160.1:3333"
+ :openrefine/project-name "call-flow-openrefine"
+ :openrefine/import-format "text/tsv"
+ :openrefine/export-format "xlsx"
+ :openrefine/open-browser? true}

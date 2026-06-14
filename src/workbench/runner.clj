@@ -58,6 +58,91 @@
                     rows)]
     (spit path (str header "\n" (str/join "\n" lines) (when (seq lines) "\n")))))
 
+(defn- resolve-source-file
+  "trial の :input/java-roots から相対ファイルパスを解決する。"
+  [trial rel-path]
+  (some (fn [root]
+          (let [f (io/file root rel-path)]
+            (when (.exists f) f)))
+        (:input/java-roots trial)))
+
+(defn- method-id-from-sig [sig]
+  (str (:jsig/class sig) "/" (:jsig/method sig)))
+
+(defn- build-slice-context
+  "root/depth から slice 関連の中間データを構築する。"
+  [trial {:keys [root depth direction exclude-test]
+          :or   {depth 2 direction :forward exclude-test true}}]
+  (let [trial-id    (:trial/id trial)
+        rs          (core/jrefs :trial trial-id :exclude-test exclude-test)
+        method-locs (core/method-locations :trial trial-id)
+        slice-rows  (core/slice-results root :depth depth :direction direction
+                                        :rs rs :method-locations method-locs)
+        slice-by-id (into {} (map (juxt :method-id identity) slice-rows))
+        jsigs       (core/jsigs :trial trial-id)
+        spans       (->> jsigs
+                         (map (fn [sig]
+                                {:method-id         (method-id-from-sig sig)
+                                 :class             (:jsig/class sig)
+                                 :method            (:jsig/method sig)
+                                 :file              (:jsig/file sig)
+                                 :method-start-line (:jsig/start-line sig)
+                                 :method-end-line   (:jsig/end-line sig)
+                                 :return-type       (:jsig/return sig)
+                                 :mods              (str/join " " (:jsig/mods sig))
+                                 :params            (pr-str (:jsig/params sig))}))
+                         (sort-by (juxt :file :method-start-line :method-id))
+                         vec)
+        spans-by-file (group-by :file spans)
+        calls-by-line (->> rs
+                           (group-by (fn [{:keys [file line]}] [file line])))]
+    {:slice-rows slice-rows
+     :slice-by-id slice-by-id
+     :spans spans
+     :spans-by-file spans-by-file
+     :calls-by-line calls-by-line}))
+
+(defn- line-enrichment
+  "1 行分の source-lines enriched row を返す。"
+  [file line text spans-by-file calls-by-line slice-by-id]
+  (let [span (->> (get spans-by-file file)
+                  (filter (fn [{:keys [method-start-line method-end-line]}]
+                            (and method-start-line method-end-line
+                                 (<= method-start-line line method-end-line))))
+                  first)
+        slice-row (some-> span :method-id slice-by-id)
+        calls     (get calls-by-line [file line] [])]
+    {:file              file
+     :line              line
+     :text              text
+     :class             (:class span)
+     :method-id         (:method-id span)
+     :method-start-line (:method-start-line span)
+     :method-end-line   (:method-end-line span)
+     :slice-root-method (:root-method slice-row)
+     :slice-depth       (:depth slice-row)
+     :slice-parent      (:parent-method slice-row)
+     :in-slice-method?  (boolean slice-row)
+     :call-count        (count calls)
+     :call-to           (str/join " | " (sort (distinct (map :to calls))))}))
+
+(defn- read-source-lines
+  "対象ファイル群から行単位の source row を返す。"
+  [trial files]
+  (->> files
+       distinct
+       sort
+       (mapcat (fn [rel-path]
+                 (when-let [f (resolve-source-file trial rel-path)]
+                   (with-open [rdr (io/reader f)]
+                     (doall
+                      (map-indexed (fn [idx line]
+                                     {:file rel-path
+                                      :line (inc idx)
+                                      :text line})
+                                   (line-seq rdr)))))))
+       vec))
+
 (defmethod run-phase! :ingest/jref [trial _]
   (let [n (core/jref! (:input/java-roots trial) :trial (:trial/id trial))]
     (println (str "  refs: " n))))
@@ -179,6 +264,46 @@
                       :edge-kind]]
     (write-tsv! path columns rows)
     (println (str "  root: " root))
+    (println (str "  rows: " (count rows)))
+    (println (str "  wrote: " path))))
+
+(defmethod run-phase! :analyze/export-method-spans [trial phase-spec]
+  (let [{:keys [root depth output-file]
+         :or   {depth 2 output-file "method-spans.tsv"}} (:params phase-spec)
+        {:keys [spans slice-by-id]} (build-slice-context trial {:root root :depth depth})
+        rows (->> spans
+                  (map (fn [row]
+                         (assoc row
+                                :slice-depth (get-in slice-by-id [(:method-id row) :depth])
+                                :in-slice-method? (contains? slice-by-id (:method-id row)))))
+                  (filter :in-slice-method?)
+                  vec)
+        path (output-path trial output-file)
+        columns [:method-id :class :method :file :method-start-line :method-end-line
+                 :return-type :mods :params :slice-depth :in-slice-method?]]
+    (write-tsv! path columns rows)
+    (println (str "  rows: " (count rows)))
+    (println (str "  wrote: " path))))
+
+(defmethod run-phase! :analyze/export-source-lines [trial phase-spec]
+  (let [{:keys [root depth output-file]
+         :or   {depth 2 output-file "source-lines-enriched.tsv"}} (:params phase-spec)
+        {:keys [slice-rows slice-by-id spans-by-file calls-by-line]} (build-slice-context trial {:root root :depth depth})
+        files (->> slice-rows
+                   (map :method-file)
+                   (remove nil?)
+                   distinct
+                   vec)
+        rows  (->> (read-source-lines trial files)
+                   (map (fn [{:keys [file line text]}]
+                          (line-enrichment file line text spans-by-file calls-by-line slice-by-id)))
+                   vec)
+        path (output-path trial output-file)
+        columns [:file :line :text :class :method-id :method-start-line :method-end-line
+                 :slice-root-method :slice-depth :slice-parent :in-slice-method?
+                 :call-count :call-to]]
+    (write-tsv! path columns rows)
+    (println (str "  files: " (count files)))
     (println (str "  rows: " (count rows)))
     (println (str "  wrote: " path))))
 
