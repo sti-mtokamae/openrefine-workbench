@@ -246,6 +246,17 @@ OpenRefine には 1 枚の巨大テーブルを渡すより、役割別に分け
 「この行は変更影響スライスに含まれるか」
 を OpenRefine 上で確認できる。
 
+このとき source 側の対象範囲は、必ずしも `root + depth` だけで決めなくてよい。
+実務ではむしろ、
+
+- `:scope :all` で `:input/java-roots` 全体を出す
+- `:package-prefixes` で特定 package 配下に絞る
+- `:classes` で特定 class 群だけを出す
+- `:files` で明示的な source file 一覧を出す
+
+といった source 主導の scope の方が扱いやすいことが多い。
+`root + depth` は、その scope 上に call-flow の印を重ねる補助情報として使うのが自然である。
+
 ---
 
 ## 8. OpenRefine に期待する役割

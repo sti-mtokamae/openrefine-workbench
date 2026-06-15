@@ -1,6 +1,9 @@
 method-id	class	method	file	method-start-line	method-end-line	return-type	mods	params	slice-depth	in-slice-method?
 AuditClient/recordAccess	AuditClient	recordAccess	src/main/java/com/example/AuditClient.java	4	6	void	public	[]	2	true
 BarService/bar	BarService	bar	src/main/java/com/example/BarService.java	12	16	String	public	[]	1	true
+BarService/buildSummary	BarService	buildSummary	src/main/java/com/example/BarService.java	18	21	String	public	[]		false
 BazRepository/fetchMessage	BazRepository	fetchMessage	src/main/java/com/example/BazRepository.java	4	6	String	public	[]	2	true
+BazRepository/fetchSummary	BazRepository	fetchSummary	src/main/java/com/example/BazRepository.java	8	10	String	public	[]		false
 FooController/foo	FooController	foo	src/main/java/com/example/FooController.java	10	12	String	public	[]	0	true
+FooController/summary	FooController	summary	src/main/java/com/example/FooController.java	14	16	String	public	[]		false
 FormatterUtil/wrap	FormatterUtil	wrap	src/main/java/com/example/FormatterUtil.java	4	6	String	public static	[{:name "value", :type "String"}]	3	true

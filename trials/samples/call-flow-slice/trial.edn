@@ -20,10 +20,12 @@
             :depth 3
             :output-file "foo-call-flow.tsv"}}
   {:phase :analyze/export-method-spans
-   :params {:root "FooController/foo"
+   :params {:package-prefixes ["com.example"]
+            :root "FooController/foo"
             :depth 3
             :output-file "foo-method-spans.tsv"}}
   {:phase :analyze/export-source-lines
-   :params {:root "FooController/foo"
+   :params {:package-prefixes ["com.example"]
+            :root "FooController/foo"
             :depth 3
             :output-file "foo-source-lines-enriched.tsv"}}]}

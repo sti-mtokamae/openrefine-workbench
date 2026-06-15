@@ -272,9 +272,20 @@ bin/run-trial trials/samples/call-flow-slice/trial.edn
 1. `:ingest/jref`
 2. `:ingest/jsig`
 3. `:analyze/slice-call-flow`
+4. `:analyze/export-method-spans`
+5. `:analyze/export-source-lines`
 
-結果は `trials/samples/call-flow-slice/exports/foo-call-flow.tsv` に出力される。
-この TSV は OpenRefine だけでなく、Excel や AI Agent に渡す中間表としても使える。
+結果は次に出力される。
+
+- `trials/samples/call-flow-slice/exports/foo-call-flow.tsv`
+- `trials/samples/call-flow-slice/exports/foo-method-spans.tsv`
+- `trials/samples/call-flow-slice/exports/foo-source-lines-enriched.tsv`
+
+`foo-call-flow.tsv` は root からの呼び出し骨格を見る表で、
+`foo-method-spans.tsv` / `foo-source-lines-enriched.tsv` は
+`trial.edn` 側の `:package-prefixes` / `:classes` / `:files` / `:scope :all`
+で source scope を決めて出力できる。
+これらの TSV は OpenRefine だけでなく、Excel や AI Agent に渡す中間表としても使える。
 
 ---
 

@@ -1,65 +1,65 @@
-file	line	text	class	method-id	method-start-line	method-end-line	slice-root-method	slice-depth	slice-parent	in-slice-method?	call-count	call-to
-src/main/java/com/example/AuditClient.java	1	package com.example;									0	
-src/main/java/com/example/AuditClient.java	2										0	
-src/main/java/com/example/AuditClient.java	3	public class AuditClient {									0	
-src/main/java/com/example/AuditClient.java	4	    public void recordAccess() {	AuditClient	AuditClient/recordAccess	4	6	FooController/foo	2	BarService/bar	true	0	
-src/main/java/com/example/AuditClient.java	5	        FormatterUtil.wrap("audit");	AuditClient	AuditClient/recordAccess	4	6	FooController/foo	2	BarService/bar	true	1	FormatterUtil/wrap
-src/main/java/com/example/AuditClient.java	6	    }	AuditClient	AuditClient/recordAccess	4	6	FooController/foo	2	BarService/bar	true	0	
-src/main/java/com/example/AuditClient.java	7	}									0	
-src/main/java/com/example/BarService.java	1	package com.example;									0	
-src/main/java/com/example/BarService.java	2										0	
-src/main/java/com/example/BarService.java	3	public class BarService {									0	
-src/main/java/com/example/BarService.java	4	    private final BazRepository bazRepository;									0	
-src/main/java/com/example/BarService.java	5	    private final AuditClient auditClient;									0	
-src/main/java/com/example/BarService.java	6										0	
-src/main/java/com/example/BarService.java	7	    public BarService(BazRepository bazRepository, AuditClient auditClient) {									0	
-src/main/java/com/example/BarService.java	8	        this.bazRepository = bazRepository;									0	
-src/main/java/com/example/BarService.java	9	        this.auditClient = auditClient;									0	
-src/main/java/com/example/BarService.java	10	    }									0	
-src/main/java/com/example/BarService.java	11										0	
-src/main/java/com/example/BarService.java	12	    public String bar() {	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	0	
-src/main/java/com/example/BarService.java	13	        String message = bazRepository.fetchMessage();	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	1	BazRepository/fetchMessage
-src/main/java/com/example/BarService.java	14	        auditClient.recordAccess();	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	1	AuditClient/recordAccess
-src/main/java/com/example/BarService.java	15	        return message;	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	0	
-src/main/java/com/example/BarService.java	16	    }	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	0	
-src/main/java/com/example/BarService.java	17										0	
-src/main/java/com/example/BarService.java	18	    public String buildSummary() {	BarService	BarService/buildSummary	18	21					0	
-src/main/java/com/example/BarService.java	19	        String raw = bazRepository.fetchSummary();	BarService	BarService/buildSummary	18	21					1	BazRepository/fetchSummary
-src/main/java/com/example/BarService.java	20	        return FormatterUtil.wrap(raw);	BarService	BarService/buildSummary	18	21					1	FormatterUtil/wrap
-src/main/java/com/example/BarService.java	21	    }	BarService	BarService/buildSummary	18	21					0	
-src/main/java/com/example/BarService.java	22	}									0	
-src/main/java/com/example/BazRepository.java	1	package com.example;									0	
-src/main/java/com/example/BazRepository.java	2										0	
-src/main/java/com/example/BazRepository.java	3	public class BazRepository {									0	
-src/main/java/com/example/BazRepository.java	4	    public String fetchMessage() {	BazRepository	BazRepository/fetchMessage	4	6	FooController/foo	2	BarService/bar	true	0	
-src/main/java/com/example/BazRepository.java	5	        return FormatterUtil.wrap("bar");	BazRepository	BazRepository/fetchMessage	4	6	FooController/foo	2	BarService/bar	true	1	FormatterUtil/wrap
-src/main/java/com/example/BazRepository.java	6	    }	BazRepository	BazRepository/fetchMessage	4	6	FooController/foo	2	BarService/bar	true	0	
-src/main/java/com/example/BazRepository.java	7										0	
-src/main/java/com/example/BazRepository.java	8	    public String fetchSummary() {	BazRepository	BazRepository/fetchSummary	8	10					0	
-src/main/java/com/example/BazRepository.java	9	        return FormatterUtil.wrap("summary");	BazRepository	BazRepository/fetchSummary	8	10					1	FormatterUtil/wrap
-src/main/java/com/example/BazRepository.java	10	    }	BazRepository	BazRepository/fetchSummary	8	10					0	
-src/main/java/com/example/BazRepository.java	11	}									0	
-src/main/java/com/example/FooController.java	1	package com.example;									0	
-src/main/java/com/example/FooController.java	2										0	
-src/main/java/com/example/FooController.java	3	public class FooController {									0	
-src/main/java/com/example/FooController.java	4	    private final BarService barService;									0	
-src/main/java/com/example/FooController.java	5										0	
-src/main/java/com/example/FooController.java	6	    public FooController(BarService barService) {									0	
-src/main/java/com/example/FooController.java	7	        this.barService = barService;									0	
-src/main/java/com/example/FooController.java	8	    }									0	
-src/main/java/com/example/FooController.java	9										0	
-src/main/java/com/example/FooController.java	10	    public String foo() {	FooController	FooController/foo	10	12	FooController/foo	0		true	0	
-src/main/java/com/example/FooController.java	11	        return barService.bar();	FooController	FooController/foo	10	12	FooController/foo	0		true	1	BarService/bar
-src/main/java/com/example/FooController.java	12	    }	FooController	FooController/foo	10	12	FooController/foo	0		true	0	
-src/main/java/com/example/FooController.java	13										0	
-src/main/java/com/example/FooController.java	14	    public String summary() {	FooController	FooController/summary	14	16					0	
-src/main/java/com/example/FooController.java	15	        return barService.buildSummary();	FooController	FooController/summary	14	16					1	BarService/buildSummary
-src/main/java/com/example/FooController.java	16	    }	FooController	FooController/summary	14	16					0	
-src/main/java/com/example/FooController.java	17	}									0	
-src/main/java/com/example/FormatterUtil.java	1	package com.example;									0	
-src/main/java/com/example/FormatterUtil.java	2										0	
-src/main/java/com/example/FormatterUtil.java	3	public class FormatterUtil {									0	
-src/main/java/com/example/FormatterUtil.java	4	    public static String wrap(String value) {	FormatterUtil	FormatterUtil/wrap	4	6	FooController/foo	3	BazRepository/fetchMessage	true	0	
-src/main/java/com/example/FormatterUtil.java	5	        return "[" + value + "]";	FormatterUtil	FormatterUtil/wrap	4	6	FooController/foo	3	BazRepository/fetchMessage	true	0	
-src/main/java/com/example/FormatterUtil.java	6	    }	FormatterUtil	FormatterUtil/wrap	4	6	FooController/foo	3	BazRepository/fetchMessage	true	0	
-src/main/java/com/example/FormatterUtil.java	7	}									0	
+file	package	file-class	line	text	blank-line?	class	method-id	method-start-line	method-end-line	slice-root-method	slice-depth	slice-parent	in-slice-method?	call-count	call-to
+src/main/java/com/example/AuditClient.java	com.example	AuditClient	1	package com.example;	false								false	0	
+src/main/java/com/example/AuditClient.java	com.example	AuditClient	2		true								false	0	
+src/main/java/com/example/AuditClient.java	com.example	AuditClient	3	public class AuditClient {	false								false	0	
+src/main/java/com/example/AuditClient.java	com.example	AuditClient	4	    public void recordAccess() {	false	AuditClient	AuditClient/recordAccess	4	6	FooController/foo	2	BarService/bar	true	0	
+src/main/java/com/example/AuditClient.java	com.example	AuditClient	5	        FormatterUtil.wrap("audit");	false	AuditClient	AuditClient/recordAccess	4	6	FooController/foo	2	BarService/bar	true	1	FormatterUtil/wrap
+src/main/java/com/example/AuditClient.java	com.example	AuditClient	6	    }	false	AuditClient	AuditClient/recordAccess	4	6	FooController/foo	2	BarService/bar	true	0	
+src/main/java/com/example/AuditClient.java	com.example	AuditClient	7	}	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	1	package com.example;	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	2		true								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	3	public class BarService {	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	4	    private final BazRepository bazRepository;	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	5	    private final AuditClient auditClient;	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	6		true								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	7	    public BarService(BazRepository bazRepository, AuditClient auditClient) {	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	8	        this.bazRepository = bazRepository;	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	9	        this.auditClient = auditClient;	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	10	    }	false								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	11		true								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	12	    public String bar() {	false	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	0	
+src/main/java/com/example/BarService.java	com.example	BarService	13	        String message = bazRepository.fetchMessage();	false	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	1	BazRepository/fetchMessage
+src/main/java/com/example/BarService.java	com.example	BarService	14	        auditClient.recordAccess();	false	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	1	AuditClient/recordAccess
+src/main/java/com/example/BarService.java	com.example	BarService	15	        return message;	false	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	0	
+src/main/java/com/example/BarService.java	com.example	BarService	16	    }	false	BarService	BarService/bar	12	16	FooController/foo	1	FooController/foo	true	0	
+src/main/java/com/example/BarService.java	com.example	BarService	17		true								false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	18	    public String buildSummary() {	false	BarService	BarService/buildSummary	18	21				false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	19	        String raw = bazRepository.fetchSummary();	false	BarService	BarService/buildSummary	18	21				false	1	BazRepository/fetchSummary
+src/main/java/com/example/BarService.java	com.example	BarService	20	        return FormatterUtil.wrap(raw);	false	BarService	BarService/buildSummary	18	21				false	1	FormatterUtil/wrap
+src/main/java/com/example/BarService.java	com.example	BarService	21	    }	false	BarService	BarService/buildSummary	18	21				false	0	
+src/main/java/com/example/BarService.java	com.example	BarService	22	}	false								false	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	1	package com.example;	false								false	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	2		true								false	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	3	public class BazRepository {	false								false	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	4	    public String fetchMessage() {	false	BazRepository	BazRepository/fetchMessage	4	6	FooController/foo	2	BarService/bar	true	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	5	        return FormatterUtil.wrap("bar");	false	BazRepository	BazRepository/fetchMessage	4	6	FooController/foo	2	BarService/bar	true	1	FormatterUtil/wrap
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	6	    }	false	BazRepository	BazRepository/fetchMessage	4	6	FooController/foo	2	BarService/bar	true	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	7		true								false	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	8	    public String fetchSummary() {	false	BazRepository	BazRepository/fetchSummary	8	10				false	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	9	        return FormatterUtil.wrap("summary");	false	BazRepository	BazRepository/fetchSummary	8	10				false	1	FormatterUtil/wrap
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	10	    }	false	BazRepository	BazRepository/fetchSummary	8	10				false	0	
+src/main/java/com/example/BazRepository.java	com.example	BazRepository	11	}	false								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	1	package com.example;	false								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	2		true								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	3	public class FooController {	false								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	4	    private final BarService barService;	false								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	5		true								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	6	    public FooController(BarService barService) {	false								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	7	        this.barService = barService;	false								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	8	    }	false								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	9		true								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	10	    public String foo() {	false	FooController	FooController/foo	10	12	FooController/foo	0		true	0	
+src/main/java/com/example/FooController.java	com.example	FooController	11	        return barService.bar();	false	FooController	FooController/foo	10	12	FooController/foo	0		true	1	BarService/bar
+src/main/java/com/example/FooController.java	com.example	FooController	12	    }	false	FooController	FooController/foo	10	12	FooController/foo	0		true	0	
+src/main/java/com/example/FooController.java	com.example	FooController	13		true								false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	14	    public String summary() {	false	FooController	FooController/summary	14	16				false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	15	        return barService.buildSummary();	false	FooController	FooController/summary	14	16				false	1	BarService/buildSummary
+src/main/java/com/example/FooController.java	com.example	FooController	16	    }	false	FooController	FooController/summary	14	16				false	0	
+src/main/java/com/example/FooController.java	com.example	FooController	17	}	false								false	0	
+src/main/java/com/example/FormatterUtil.java	com.example	FormatterUtil	1	package com.example;	false								false	0	
+src/main/java/com/example/FormatterUtil.java	com.example	FormatterUtil	2		true								false	0	
+src/main/java/com/example/FormatterUtil.java	com.example	FormatterUtil	3	public class FormatterUtil {	false								false	0	
+src/main/java/com/example/FormatterUtil.java	com.example	FormatterUtil	4	    public static String wrap(String value) {	false	FormatterUtil	FormatterUtil/wrap	4	6	FooController/foo	3	BazRepository/fetchMessage	true	0	
+src/main/java/com/example/FormatterUtil.java	com.example	FormatterUtil	5	        return "[" + value + "]";	false	FormatterUtil	FormatterUtil/wrap	4	6	FooController/foo	3	BazRepository/fetchMessage	true	0	
+src/main/java/com/example/FormatterUtil.java	com.example	FormatterUtil	6	    }	false	FormatterUtil	FormatterUtil/wrap	4	6	FooController/foo	3	BazRepository/fetchMessage	true	0	
+src/main/java/com/example/FormatterUtil.java	com.example	FormatterUtil	7	}	false								false	0	

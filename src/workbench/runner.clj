@@ -44,7 +44,7 @@
     (str (io/file base out filename))))
 
 (defn- tsv-escape [v]
-  (-> (str (or v ""))
+  (-> (if (nil? v) "" (str v))
       (str/replace #"\t" " ")
       (str/replace #"\r?\n" " ")))
 
@@ -68,6 +68,46 @@
 
 (defn- method-id-from-sig [sig]
   (str (:jsig/class sig) "/" (:jsig/method sig)))
+
+(defn- java-file->class-name [rel-path]
+  (some-> rel-path io/file .getName (str/replace #"\.java$" "")))
+
+(defn- detect-package-name
+  "Java ソース先頭付近から package 名を推定する。"
+  [f]
+  (with-open [rdr (io/reader f)]
+    (some (fn [line]
+            (some->> (re-matches #"\s*package\s+([A-Za-z0-9_.]+)\s*;\s*" line)
+                     second))
+          (take 80 (line-seq rdr)))))
+
+(defn- all-java-source-files
+  "trial の :input/java-roots 配下にある .java を相対パスで列挙する。"
+  [trial]
+  (->> (:input/java-roots trial)
+       (mapcat (fn [root]
+                 (let [root-file (io/file root)
+                       root-path (.toPath root-file)]
+                   (for [f (file-seq root-file)
+                         :when (and (.isFile f)
+                                    (str/ends-with? (.getName f) ".java"))]
+                     (-> root-path
+                         (.relativize (.toPath f))
+                         str)))))
+       distinct
+       sort
+       vec))
+
+(defn- source-file-catalog
+  "source file ごとのメタデータを返す。"
+  [trial]
+  (->> (all-java-source-files trial)
+       (map (fn [rel-path]
+              (let [f (resolve-source-file trial rel-path)]
+                {:file rel-path
+                 :file-class (java-file->class-name rel-path)
+                 :package (when f (detect-package-name f))})))
+       vec))
 
 (defn- build-slice-context
   "root/depth から slice 関連の中間データを構築する。"
@@ -102,19 +142,74 @@
      :spans-by-file spans-by-file
      :calls-by-line calls-by-line}))
 
+(defn- resolve-export-scope
+  "export-method-spans / export-source-lines 用の対象ファイル集合を解決する。
+
+   サポートする params:
+   - :scope :all
+   - :package-prefixes [\"com.example\"]
+   - :classes [\"FooController\" \"BarService\"]
+   - :files [\"src/main/java/.../FooController.java\"]
+   - :root + :depth （slice 由来のファイル集合）
+
+   複数指定時は和集合で扱う。"
+  [trial {:keys [scope package-prefixes classes files root depth]
+          :or   {depth 2}}]
+  (let [catalog          (source-file-catalog trial)
+        file-set         (set (map :file catalog))
+        class-set        (set classes)
+        file-selectors   (cond-> #{}
+                           (= scope :all) (into file-set)
+                           (seq files) (into (filter file-set files))
+                           (seq classes) (into (->> catalog
+                                                    (filter #(contains? class-set (:file-class %)))
+                                                    (map :file)))
+                           (seq package-prefixes) (into (->> catalog
+                                                              (filter (fn [{:keys [package]}]
+                                                                        (some #(and package
+                                                                                    (str/starts-with? package %))
+                                                                              package-prefixes)))
+                                                              (map :file))))
+        slice-context    (when root
+                           (build-slice-context trial {:root root :depth depth}))
+        slice-files      (->> (:slice-rows slice-context)
+                              (map :method-file)
+                              (remove nil?)
+                              set)
+        selected-files   (cond
+                           (= scope :all) (set (map :file catalog))
+                           (or (seq files)
+                               (seq classes)
+                               (seq package-prefixes)
+                               root) (into file-selectors slice-files)
+                           :else (throw (ex-info "export scope requires :scope :all, :package-prefixes, :classes, :files, or :root"
+                                                 {:params {:scope scope
+                                                           :package-prefixes package-prefixes
+                                                           :classes classes
+                                                           :files files
+                                                           :root root
+                                                           :depth depth}})))]
+    {:catalog catalog
+     :selected-files (->> selected-files sort vec)
+     :slice-context slice-context}))
+
 (defn- line-enrichment
   "1 行分の source-lines enriched row を返す。"
-  [file line text spans-by-file calls-by-line slice-by-id]
+  [catalog-by-file file line text spans-by-file calls-by-line slice-by-id]
   (let [span (->> (get spans-by-file file)
                   (filter (fn [{:keys [method-start-line method-end-line]}]
                             (and method-start-line method-end-line
                                  (<= method-start-line line method-end-line))))
                   first)
         slice-row (some-> span :method-id slice-by-id)
-        calls     (get calls-by-line [file line] [])]
+        calls     (get calls-by-line [file line] [])
+        {:keys [package file-class]} (get catalog-by-file file)]
     {:file              file
+     :package           package
+     :file-class        file-class
      :line              line
      :text              text
+     :blank-line?       (str/blank? text)
      :class             (:class span)
      :method-id         (:method-id span)
      :method-start-line (:method-start-line span)
@@ -268,15 +363,29 @@
     (println (str "  wrote: " path))))
 
 (defmethod run-phase! :analyze/export-method-spans [trial phase-spec]
-  (let [{:keys [root depth output-file]
-         :or   {depth 2 output-file "method-spans.tsv"}} (:params phase-spec)
-        {:keys [spans slice-by-id]} (build-slice-context trial {:root root :depth depth})
+  (let [{:keys [output-file] :or {output-file "method-spans.tsv"}} (:params phase-spec)
+        {:keys [selected-files slice-context]} (resolve-export-scope trial (:params phase-spec))
+        {:keys [spans slice-by-id]} (merge {:spans (->> (core/jsigs :trial (:trial/id trial))
+                                                        (map (fn [sig]
+                                                               {:method-id         (method-id-from-sig sig)
+                                                                :class             (:jsig/class sig)
+                                                                :method            (:jsig/method sig)
+                                                                :file              (:jsig/file sig)
+                                                                :method-start-line (:jsig/start-line sig)
+                                                                :method-end-line   (:jsig/end-line sig)
+                                                                :return-type       (:jsig/return sig)
+                                                                :mods              (str/join " " (:jsig/mods sig))
+                                                                :params            (pr-str (:jsig/params sig))}))
+                                                        (sort-by (juxt :file :method-start-line :method-id))
+                                                        vec)
+                                                :slice-by-id {}}
+                                               slice-context)
         rows (->> spans
                   (map (fn [row]
                          (assoc row
                                 :slice-depth (get-in slice-by-id [(:method-id row) :depth])
                                 :in-slice-method? (contains? slice-by-id (:method-id row)))))
-                  (filter :in-slice-method?)
+                  (filter (fn [{:keys [file]}] (some #{file} selected-files)))
                   vec)
         path (output-path trial output-file)
         columns [:method-id :class :method :file :method-start-line :method-end-line
@@ -286,20 +395,29 @@
     (println (str "  wrote: " path))))
 
 (defmethod run-phase! :analyze/export-source-lines [trial phase-spec]
-  (let [{:keys [root depth output-file]
-         :or   {depth 2 output-file "source-lines-enriched.tsv"}} (:params phase-spec)
-        {:keys [slice-rows slice-by-id spans-by-file calls-by-line]} (build-slice-context trial {:root root :depth depth})
-        files (->> slice-rows
-                   (map :method-file)
-                   (remove nil?)
-                   distinct
-                   vec)
+  (let [{:keys [output-file] :or {output-file "source-lines-enriched.tsv"}} (:params phase-spec)
+        {:keys [catalog selected-files slice-context]} (resolve-export-scope trial (:params phase-spec))
+        {:keys [slice-by-id spans-by-file calls-by-line]} (merge {:slice-by-id {}
+                                                                  :spans-by-file (->> (core/jsigs :trial (:trial/id trial))
+                                                                                      (map (fn [sig]
+                                                                                             {:method-id         (method-id-from-sig sig)
+                                                                                              :class             (:jsig/class sig)
+                                                                                              :method            (:jsig/method sig)
+                                                                                              :file              (:jsig/file sig)
+                                                                                              :method-start-line (:jsig/start-line sig)
+                                                                                              :method-end-line   (:jsig/end-line sig)}))
+                                                                                      (group-by :file))
+                                                                  :calls-by-line (->> (core/jrefs :trial (:trial/id trial) :exclude-test true)
+                                                                                      (group-by (fn [{:keys [file line]}] [file line])))}
+                                                                 slice-context)
+        catalog-by-file (into {} (map (juxt :file identity) catalog))
+        files selected-files
         rows  (->> (read-source-lines trial files)
                    (map (fn [{:keys [file line text]}]
-                          (line-enrichment file line text spans-by-file calls-by-line slice-by-id)))
+                          (line-enrichment catalog-by-file file line text spans-by-file calls-by-line slice-by-id)))
                    vec)
         path (output-path trial output-file)
-        columns [:file :line :text :class :method-id :method-start-line :method-end-line
+        columns [:file :package :file-class :line :text :blank-line? :class :method-id :method-start-line :method-end-line
                  :slice-root-method :slice-depth :slice-parent :in-slice-method?
                  :call-count :call-to]]
     (write-tsv! path columns rows)
